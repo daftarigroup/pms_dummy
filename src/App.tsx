@@ -30,6 +30,7 @@ import FinalApproval from './pages/FinalApproval/FinalApproval';
 import UploadDesignPage from './pages/ExecutionActualReport/UploadDesignPage';
 import Settings from './pages/Settings/Settings';
 import UploadDrawing from './pages/DrawingDesignUpload/UploadDrawing';
+import ScheduleReport from './pages/ExecutionActualReport/ScheduleReport';
 
 // Indent to PO Stage Pages
 import CreateIndent from './pages/IndentToPO/CreateIndent';
@@ -83,6 +84,7 @@ function App() {
                   <Route path="all-project" element={<AllProject />} />
                   <Route path="project-minors/:projectNo" element={<ProjectMinors />} />
                   <Route path="view-design/:projectNo" element={<ViewDesign />} />
+                  <Route path="schedule-report/:projectNo" element={<ScheduleReport />} />
                   <Route path="product-imf/:projectNo" element={<ProductIMF />} />
                   <Route path="valve-report/:projectNo" element={<ValveReport />} />
                   <Route path="back-filling-report/:projectNo" element={<BackFillingReport />} />

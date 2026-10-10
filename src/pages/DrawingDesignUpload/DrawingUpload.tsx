@@ -1304,14 +1304,18 @@ export default function DrawingUpload() {
                         </div>
 
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {((m.scheduleFile && m.scheduleFile !== '') || m.scheduleFileId) && (
+                          {((m.scheduleFile && m.scheduleFile !== '') || m.scheduleFileId || (m.scheduleRows && m.scheduleRows.length > 0)) && (
                             <button
                               type="button"
-                              onClick={(e) => handleViewSchedulePdf(m.scheduleFile || m.scheduleFileId, m.minorName, e)}
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-100 transition-colors"
-                              title="View uploaded schedule PDF"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFormProject(null);
+                                navigate(`/schedule-report/${encodeURIComponent(m.id)}`);
+                              }}
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded hover:bg-rose-100 transition-colors"
+                              title="View full-size schedule report & contents"
                             >
-                              <FileText size={11} /> View Schedule
+                              <FileText size={11} /> Schedule Report
                             </button>
                           )}
                           <button

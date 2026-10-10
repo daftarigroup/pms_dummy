@@ -1,349 +1,345 @@
 /**
- * Utility to parse table data from a PDF file uploaded in the browser.
- * Extracts text streams (decompressing /FlateDecode streams using native DecompressionStream),
- * reconstructs line and column coordinates, and parses structured table rows.
+ * Enhanced PDF Table & Text Parser using pdfjs-dist
+ * Extracts high-accuracy text streams, page coordinates, and reconstructs structured tables
+ * with dedicated Content / Description, Item No, Quantity, Unit, Rate, Amount columns.
  */
+
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Setup pdf.js worker
+if (typeof window !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+}
 
 export interface ParsedPdfTable {
-    fileName: string;
-    fileSize: number;
-    fileUrl: string; // base64 data URL for viewing
-    headers: string[];
-    rows: Array<Record<string, string>>;
-    rowCount: number;
-    pageCount: number;
-    rawText: string;
+  fileName: string;
+  fileSize: number;
+  fileUrl: string;
+  headers: string[];
+  rows: Array<Record<string, string>>;
+  rowCount: number;
+  pageCount: number;
+  rawText: string;
+  totalAmount?: string;
 }
 
-/**
- * Decompresses raw Uint8Array bytes using DecompressionStream.
- */
-async function decompressFlate(data: Uint8Array): Promise<string> {
-    // Try standard 'deflate' (zlib header)
-    try {
-        const ds = new DecompressionStream('deflate');
-        const writer = ds.writable.getWriter();
-        writer.write(data as any);
-        writer.close();
-        const response = new Response(ds.readable);
-        const arrayBuf = await response.arrayBuffer();
-        return new TextDecoder('latin1').decode(arrayBuf);
-    } catch {
-        // Try 'deflate-raw' (without 2-byte zlib header)
-        try {
-            const rawData = data.length > 2 ? data.subarray(2) : data;
-            const dsRaw = new DecompressionStream('deflate-raw');
-            const writerRaw = dsRaw.writable.getWriter();
-            writerRaw.write(rawData as any);
-            writerRaw.close();
-            const responseRaw = new Response(dsRaw.readable);
-            const arrayBufRaw = await responseRaw.arrayBuffer();
-            return new TextDecoder('latin1').decode(arrayBufRaw);
-        } catch {
-            return '';
-        }
-    }
+interface TextItemCoord {
+  text: string;
+  x: number;
+  y: number;
+  page: number;
+  width: number;
+  height: number;
 }
 
-/**
- * Extracts text snippets with coordinates from a decoded PDF content stream.
- */
-function extractTextItemsFromStream(streamText: string): Array<{ text: string; x: number; y: number }> {
-    const items: Array<{ text: string; x: number; y: number }> = [];
+const LINE_TOL = 3;
+const NUM_RE = /^[\d,]+(\.\d+)?$/;
+const FIXED_HEADERS = ['Item No', 'Quantity', 'Description', 'Unit', 'Rate (Figures)', 'Rate (Words)', 'Amount'];
+const EXPECTED_COLS = 7;   // Item No, Qty, Description, Unit, Rate fig, Rate words, Amount
+const MAX_LINES_PER_ROW = 80;
 
-    // Match BT ... ET blocks
-    const btRegex = /BT[\s\S]*?ET/g;
-    let btMatch: RegExpExecArray | null;
-
-    while ((btMatch = btRegex.exec(streamText)) !== null) {
-        const block = btMatch[0];
-        let currentX = 0;
-        let currentY = 0;
-
-        // Process line by line within BT ... ET
-        const lines = block.split(/\r?\n/);
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-
-            // Check for Tm (text matrix): a b c d e f Tm
-            const tmMatch = /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+Tm/.exec(trimmed);
-            if (tmMatch) {
-                currentX = parseFloat(tmMatch[5]);
-                currentY = parseFloat(tmMatch[6]);
-            }
-
-            // Check for Td / TD (text offset): tx ty Td
-            const tdMatch = /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+T[dD]/.exec(trimmed);
-            if (tdMatch) {
-                currentX += parseFloat(tdMatch[1]);
-                currentY += parseFloat(tdMatch[2]);
-            }
-
-            // Check for Tj: (string) Tj
-            const tjMatch = /\(([\s\S]*?)\)\s*Tj/.exec(trimmed);
-            if (tjMatch) {
-                const text = cleanPdfString(tjMatch[1]);
-                if (text) {
-                    items.push({ text, x: currentX, y: currentY });
-                }
-            }
-
-            // Check for TJ: [(string) -10 (string)] TJ
-            const tjArrayMatch = /\[([\s\S]*?)\]\s*TJ/.exec(trimmed);
-            if (tjArrayMatch) {
-                const inner = tjArrayMatch[1];
-                const strParts: string[] = [];
-                const strRegex = /\(([\s\S]*?)\)/g;
-                let sMatch: RegExpExecArray | null;
-                while ((sMatch = strRegex.exec(inner)) !== null) {
-                    strParts.push(cleanPdfString(sMatch[1]));
-                }
-                const combined = strParts.join('').trim();
-                if (combined) {
-                    items.push({ text: combined, x: currentX, y: currentY });
-                }
-            }
-        }
-    }
-
-    return items;
+function groupLines(items: TextItemCoord[]) {
+  const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
+  const lines: { y: number; parts: TextItemCoord[] }[] = [];
+  for (const it of sorted) {
+    const last = lines[lines.length - 1];
+    if (last && Math.abs(last.y - it.y) <= LINE_TOL) last.parts.push(it);
+    else lines.push({ y: it.y, parts: [it] });
+  }
+  return lines.map(l => ({
+    y: l.y,
+    text: l.parts.sort((a, b) => a.x - b.x).map(p => p.text).join(' '),
+  }));
 }
 
-function cleanPdfString(raw: string): string {
-    return raw
-        .replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '\t')
-        .replace(/\\b/g, '\b')
-        .replace(/\\f/g, '\f')
-        .replace(/\\([()\\\\])/g, '$1')
-        .trim();
+/** Column edges = the widest low-coverage vertical channels (tolerates a few stray overlaps) */
+function detectColumnEdges(items: TextItemCoord[], expectedCols = EXPECTED_COLS): number[] {
+  if (!items.length) return [];
+  const minX = Math.floor(Math.min(...items.map(i => i.x)));
+  const maxX = Math.ceil(Math.max(...items.map(i => i.x + i.width)));
+  const cov = new Uint16Array(maxX - minX + 3);
+  for (const it of items) {
+    const a = Math.floor(it.x) - minX + 1;
+    const b = Math.ceil(it.x + it.width) - minX - 1;
+    for (let x = a; x <= b; x++) cov[x]++;
+  }
+  const distinctY = new Set(items.map(i => Math.round(i.y / LINE_TOL))).size;
+  const thr = Math.max(1, Math.round(0.03 * distinctY));
+
+  const first = cov.findIndex(c => c > thr);
+  let last = cov.length - 1;
+  while (last > 0 && cov[last] <= thr) last--;
+
+  const runs: { start: number; end: number }[] = [];
+  let s = -1;
+  for (let i = first; i <= last; i++) {
+    if (cov[i] <= thr) { if (s < 0) s = i; }
+    else if (s >= 0) { runs.push({ start: s, end: i }); s = -1; }
+  }
+  return runs
+    .sort((a, b) => (b.end - b.start) - (a.end - a.start))
+    .slice(0, expectedCols - 1)
+    .map(r => minX + (r.start + r.end) / 2)
+    .sort((a, b) => a - b);
 }
 
-/**
- * Group positioned text items into rows and columns to form a table.
- */
-function buildTableFromTextItems(items: Array<{ text: string; x: number; y: number }>): { headers: string[]; rows: Array<Record<string, string>> } {
-    if (items.length === 0) return { headers: [], rows: [] };
+/** Split lines into one contiguous block per anchor; block mean Y ≈ anchor Y */
+function splitLinesByAnchors(lines: { y: number }[], anchors: number[]): number[] | null {
+  const n = lines.length, m = anchors.length;
+  if (n < m || m === 0) return null;
+  const pre = [0];
+  lines.forEach(l => pre.push(pre[pre.length - 1] + l.y));
+  const cost = (s: number, e: number, i: number) => Math.abs((pre[e] - pre[s]) / (e - s) - anchors[i]);
+  const INF = 1e12;
+  const dp = Array.from({ length: m + 1 }, () => new Float64Array(n + 1).fill(INF));
+  const back = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  dp[0][0] = 0;
+  for (let i = 1; i <= m; i++)
+    for (let j = i; j <= n; j++)
+      for (let s = Math.max(i - 1, j - MAX_LINES_PER_ROW); s < j; s++) {
+        if (dp[i - 1][s] >= INF) continue;
+        const c = dp[i - 1][s] + cost(s, j, i - 1);
+        if (c < dp[i][j]) { dp[i][j] = c; back[i][j] = s; }
+      }
+  if (dp[m][n] >= INF) return null;
+  const ends: number[] = new Array(m);
+  let j = n;
+  for (let i = m; i >= 1; i--) { ends[i - 1] = j; j = back[i][j]; }
+  return ends;
+}
 
-    // Group items by Y coordinate with a tolerance of 4 pixels
-    const rowBuckets: Array<{ y: number; cells: Array<{ text: string; x: number }> }> = [];
+function buildStructuredTable(items: TextItemCoord[]): { headers: string[]; rows: Array<Record<string, string>>; totalAmount?: string } {
+  if (!items.length) return { headers: [], rows: [] };
 
-    // Sort items by Y descending (top of page to bottom), then by X ascending
-    const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+  const HEAD_SUB = /^(unit|in figures|in words)$/i;
+  const HEAD_MAIN = /(item of works|description|particular)/i;
+  const PAGE_NO = /^\d{1,4}$/;
 
-    for (const item of sorted) {
-        if (!item.text) continue;
-        let bucket = rowBuckets.find(b => Math.abs(b.y - item.y) <= 4);
-        if (!bucket) {
-            bucket = { y: item.y, cells: [] };
-            rowBuckets.push(bucket);
-        }
-        bucket.cells.push({ text: item.text, x: item.x });
+  // 1. Per page: cut header band, drop page numbers, then stitch pages into ONE continuous Y axis
+  let body: TextItemCoord[] = [];
+  let cursor = 0;
+  const pageNums = [...new Set(items.map(i => i.page))].sort((a, b) => a - b);
+
+  for (const p of pageNums) {
+    let pg = items.filter(i => i.page === p);
+
+    const mainHdr = pg.find(i => HEAD_MAIN.test(i.text));
+    let bodyTop = -Infinity;
+    if (mainHdr) {
+      const sub = pg.filter(i => HEAD_SUB.test(i.text) && Math.abs(i.y - mainHdr.y) <= 20);
+      bodyTop = Math.max(mainHdr.y, ...sub.map(s => s.y)) + 6;
     }
+    pg = pg.filter(i => i.y > bodyTop);
+    if (!pg.length) continue;
 
-    // Sort buckets by Y descending
-    rowBuckets.sort((a, b) => b.y - a.y);
-
-    // Each bucket sort by X ascending
-    for (const bucket of rowBuckets) {
-        bucket.cells.sort((a, b) => a.x - b.x);
-    }
-
-    // Convert row buckets to string arrays
-    const rawRows: string[][] = rowBuckets
-        .map(b => b.cells.map(c => c.text.trim()).filter(Boolean))
-        .filter(r => r.length > 0);
-
-    if (rawRows.length === 0) return { headers: [], rows: [] };
-
-    // Determine the most common number of columns (or max columns)
-    const maxCols = Math.max(...rawRows.map(r => r.length));
-    if (maxCols === 0) return { headers: [], rows: [] };
-
-    // Find the header row (first row with multiple columns or max columns)
-    const headerRowIdx = rawRows.findIndex(r => r.length >= 2);
-    let headers: string[] = [];
-    let dataRows: string[][] = [];
-
-    if (headerRowIdx !== -1 && rawRows.length > headerRowIdx + 1) {
-        headers = rawRows[headerRowIdx];
-        dataRows = rawRows.slice(headerRowIdx + 1);
-    } else {
-        headers = rawRows[0];
-        dataRows = rawRows.slice(1);
-    }
-
-    // Ensure headers have unique, non-empty names
-    const cleanHeaders = headers.map((h, i) => (h && h.trim() ? h.trim() : `Column ${i + 1}`));
-    while (cleanHeaders.length < maxCols) {
-        cleanHeaders.push(`Column ${cleanHeaders.length + 1}`);
-    }
-
-    // Deduplicate headers
-    const uniqueHeaders: string[] = [];
-    const counts: Record<string, number> = {};
-    for (const h of cleanHeaders) {
-        if (!counts[h]) {
-            counts[h] = 1;
-            uniqueHeaders.push(h);
-        } else {
-            counts[h]++;
-            uniqueHeaders.push(`${h} (${counts[h]})`);
-        }
-    }
-
-    // Map rows to objects
-    const mappedRows: Array<Record<string, string>> = dataRows.map((r) => {
-        const rowObj: Record<string, string> = {};
-        uniqueHeaders.forEach((header, idx) => {
-            rowObj[header] = r[idx] ?? '';
-        });
-        return rowObj;
+    // lone page number at the very top or bottom of the page
+    const ys = pg.map(i => i.y);
+    const yTop = Math.min(...ys), yBot = Math.max(...ys);
+    pg = pg.filter(i => {
+      const isEdge = Math.abs(i.y - yTop) <= LINE_TOL || Math.abs(i.y - yBot) <= LINE_TOL;
+      if (!isEdge || !PAGE_NO.test(i.text)) return true;
+      const sameLine = pg.filter(o => Math.abs(o.y - i.y) <= LINE_TOL);
+      return sameLine.length > 1; // keep if it shares a line with real table text
     });
+    if (!pg.length) continue;
 
-    return { headers: uniqueHeaders, rows: mappedRows };
-}
+    const minY = Math.min(...pg.map(i => i.y)), maxY = Math.max(...pg.map(i => i.y));
+    const shift = cursor - minY;
+    pg.forEach(i => body.push({ ...i, y: i.y + shift }));
+    cursor = maxY + shift + 12;
+  }
+  if (!body.length) return { headers: [], rows: [] };
 
-/**
- * Fallback parser for plain text extracted from PDF streams
- * Splits text into lines and divides lines by multi-space, pipe, or tab delimiters.
- */
-function parseTextToTable(fullText: string): { headers: string[]; rows: Array<Record<string, string>> } {
-    const lines = fullText
-        .split(/\r?\n/)
-        .map(l => l.trim())
-        .filter(l => l.length > 0);
+  // 2. Columns
+  const edges = detectColumnEdges(body);
+  const colOf = (it: TextItemCoord) => {
+    const c = it.x + it.width / 2;
+    return edges.filter(e => e < c).length;
+  };
+  const nCols = edges.length + 1;
+  const amountCol = nCols - 1;
 
-    if (lines.length === 0) return { headers: [], rows: [] };
+  const textLen = Array(nCols).fill(0);
+  body.forEach(i => { textLen[colOf(i)] += i.text.length; });
+  const descCol = textLen.indexOf(Math.max(...textLen));
 
-    // Split lines into cell tokens by multiple spaces, tabs, or pipes
-    const tokenized = lines.map(line => {
-        if (line.includes('|')) {
-            return line.split('|').map(s => s.trim()).filter(Boolean);
-        }
-        if (line.includes('\t')) {
-            return line.split('\t').map(s => s.trim()).filter(Boolean);
-        }
-        return line.split(/\s{2,}/).map(s => s.trim()).filter(Boolean);
-    }).filter(row => row.length > 0);
+  // 3. Find Total row and discard anything below it
+  const allAmountItems = body
+    .filter(i => colOf(i) === amountCol && NUM_RE.test(i.text))
+    .sort((a, b) => a.y - b.y);
 
-    if (tokenized.length === 0) return { headers: [], rows: [] };
+  let totalAmount: string | undefined = undefined;
+  let totalRowY: number | null = null;
 
-    const maxCols = Math.max(...tokenized.map(r => r.length));
-    const headerRow = tokenized.find(r => r.length >= Math.min(2, maxCols)) || tokenized[0];
-    const headerIdx = tokenized.indexOf(headerRow);
-
-    const headers: string[] = [];
-    for (let i = 0; i < maxCols; i++) {
-        const val = headerRow[i] ? headerRow[i].trim() : `Column ${i + 1}`;
-        headers.push(val);
+  if (allAmountItems.length > 0) {
+    const lastAmount = allAmountItems[allAmountItems.length - 1];
+    // Check if there is a "Total" text item near this last amount row
+    const totalLabel = body.find(i => /\btotal\b/i.test(i.text) && Math.abs(i.y - lastAmount.y) <= 30);
+    if (totalLabel) {
+      totalAmount = lastAmount.text;
+      totalRowY = lastAmount.y;
+      // Discard everything below the Total row (certificate, signatures, amount in words)
+      body = body.filter(i => i.y <= totalRowY! + LINE_TOL);
     }
+  }
 
-    // Deduplicate headers
-    const uniqueHeaders: string[] = [];
-    const counts: Record<string, number> = {};
-    for (const h of headers) {
-        if (!counts[h]) {
-            counts[h] = 1;
-            uniqueHeaders.push(h);
-        } else {
-            counts[h]++;
-            uniqueHeaders.push(`${h} (${counts[h]})`);
-        }
-    }
+  // 4. One anchor per number in the Amount column (excluding the Total row if identified)
+  let anchors = body
+    .filter(i => colOf(i) === amountCol && NUM_RE.test(i.text))
+    .sort((a, b) => a.y - b.y)
+    .map(a => a.y);
 
-    const dataRows = tokenized.slice(headerIdx + 1);
-    const mappedRows: Array<Record<string, string>> = dataRows.map(r => {
-        const obj: Record<string, string> = {};
-        uniqueHeaders.forEach((h, idx) => {
-            obj[h] = r[idx] ?? '';
-        });
-        return obj;
+  if (totalRowY !== null) {
+    anchors = anchors.filter(a => Math.abs(a - totalRowY!) > 1);
+  }
+
+  if (!anchors.length) return { headers: [], rows: [], totalAmount };
+
+  // 5. Non-description cells -> nearest anchor
+  const nonDesc: TextItemCoord[][][] = anchors.map(() => Array.from({ length: nCols }, () => []));
+  for (const it of body) {
+    const c = colOf(it);
+    if (c === descCol) continue;
+    let best = 0, bd = Infinity;
+    anchors.forEach((a, k) => { const d = Math.abs(a - it.y); if (d < bd) { bd = d; best = k; } });
+    nonDesc[best][c].push(it);
+  }
+
+  // 6. Description lines -> contiguous blocks per anchor
+  const descLines = groupLines(body.filter(i => colOf(i) === descCol));
+  const ends = splitLinesByAnchors(descLines, anchors);
+  const descText: string[] = anchors.map(() => '');
+  if (ends) {
+    let start = 0;
+    anchors.forEach((_, k) => {
+      descText[k] = descLines.slice(start, ends[k]).map(l => l.text).join(' ');
+      start = ends[k];
     });
+  } else {
+    descLines.forEach(l => {
+      let b = 0;
+      anchors.forEach((v, idx) => { if (Math.abs(v - l.y) < Math.abs(anchors[b] - l.y)) b = idx; });
+      descText[b] += (descText[b] ? ' ' : '') + l.text;
+    });
+  }
 
-    return { headers: uniqueHeaders, rows: mappedRows };
+  // 7. Assemble raw rows
+  const headers = nCols === FIXED_HEADERS.length
+    ? [...FIXED_HEADERS]
+    : Array.from({ length: nCols }, (_, i) => (i === descCol ? 'Description' : `Column ${i + 1}`));
+
+  const rows = anchors.map((_, k) => {
+    const obj: Record<string, string> = {};
+    headers.forEach((h, c) => {
+      obj[h] = c === descCol
+        ? descText[k].trim()
+        : groupLines(nonDesc[k][c]).map(l => l.text).join(' ').trim();
+    });
+    if (obj['Item No']) obj['Item No'] = obj['Item No'].replace(/^item\s*no\.?\s*/i, '').trim();
+    return obj;
+  });
+
+  // 8. Sequence pass to repair misplaced Item No across page breaks
+  // Item numbers are strictly increasing (1, 2, 3, ...). If row i is missing an Item No,
+  // but row i-1 has an Item No that should belong to row i (e.g. sequence gap/jump), shift it forward.
+  for (let i = 1; i < rows.length; i++) {
+    const currItemNo = (rows[i]['Item No'] || '').trim();
+    const prevItemNo = (rows[i - 1]['Item No'] || '').trim();
+
+    if (!currItemNo && prevItemNo) {
+      const prevPrevItemNo = i >= 2 ? (rows[i - 2]['Item No'] || '').trim() : '';
+      const prevPrevNum = parseInt(prevPrevItemNo, 10);
+      const prevNum = parseInt(prevItemNo, 10);
+
+      if (!isNaN(prevNum)) {
+        // If prev row contains multiple item numbers like "51 52", split them
+        const multipleMatches = prevItemNo.match(/\b\d+\b/g);
+        if (multipleMatches && multipleMatches.length > 1) {
+          rows[i - 1]['Item No'] = multipleMatches[0];
+          rows[i]['Item No'] = multipleMatches[multipleMatches.length - 1];
+        } else if (!isNaN(prevPrevNum) && prevNum > prevPrevNum + 1) {
+          // e.g. row i-2 is 50, row i-1 has "52", but row i is empty: row i-1 should be 51, row i should be 52
+          rows[i]['Item No'] = String(prevNum);
+          rows[i - 1]['Item No'] = String(prevPrevNum + 1);
+        } else if (!isNaN(prevPrevNum) && prevNum === prevPrevNum + 1) {
+          // If row i-1 actually belonged to the continuation of row i-2, and the item number on row i-1 is for row i
+          // Shift forward to row i
+          rows[i]['Item No'] = prevItemNo;
+          rows[i - 1]['Item No'] = '';
+        }
+      }
+    }
+  }
+
+  return { headers, rows, totalAmount };
 }
 
 /**
- * Main entry point: Parses a PDF file to extract table data and metadata.
+ * Extracts all text items with page coordinates using pdfjs
+ */
+async function extractTextItemsWithPdfJs(arrayBuffer: ArrayBuffer): Promise<{ items: TextItemCoord[]; pageCount: number; fullText: string }> {
+  const loadingTask = pdfjsLib.getDocument({
+    data: new Uint8Array(arrayBuffer),
+    cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
+    cMapPacked: true,
+  });
+
+  const pdf = await loadingTask.promise;
+  const pageCount = pdf.numPages;
+  const items: TextItemCoord[] = [];
+  let accumulatedText = '';
+
+  for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    const viewport = page.getViewport({ scale: 1.0 });
+
+    for (const item of textContent.items as any[]) {
+      if (!item.str || !item.str.trim()) continue;
+      const str = item.str.trim();
+      const tx = item.transform[4];
+      const ty = viewport.height - item.transform[5]; // Flip Y so 0 is at top
+
+      items.push({
+        text: str,
+        x: tx,
+        y: ty,
+        page: pageNum,
+        width: item.width || 0,
+        height: item.height || 0,
+      });
+
+      accumulatedText += str + ' ';
+    }
+    accumulatedText += '\n';
+  }
+
+  return { items, pageCount, fullText: accumulatedText };
+}
+
+/**
+ * Main Entry Point: Parses a PDF File into high-fidelity structured table rows and contents
  */
 export async function parsePdfTableFile(file: File): Promise<ParsedPdfTable> {
-    // 1. Convert file to Base64 data URL for preview/viewing
-    const fileUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
+  const arrayBuffer = await file.arrayBuffer();
 
-    // 2. Read array buffer to inspect PDF binary structure
-    const arrayBuffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    const latin1Text = new TextDecoder('latin1').decode(bytes);
+  // 1. Create Base64 data URL for preview
+  const fileUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 
-    // Approximate page count
-    const pageMatches = latin1Text.match(/\/Type\s*\/Page\b/g);
-    const pageCount = pageMatches ? pageMatches.length : 1;
+  try {
+    // 2. Extract text items and coordinates with pdf.js
+    const { items, pageCount, fullText } = await extractTextItemsWithPdfJs(arrayBuffer);
 
-    // 3. Find and extract stream contents
-    const allTextItems: Array<{ text: string; x: number; y: number }> = [];
-    let accumulatedText = '';
+    // 3. Build structured table from extracted coordinate items
+    const { headers, rows, totalAmount } = buildStructuredTable(items);
 
-    // Regex to locate stream ... endstream
-    const streamHeaderRegex = /stream\r?\n/g;
-    let match: RegExpExecArray | null;
-
-    while ((match = streamHeaderRegex.exec(latin1Text)) !== null) {
-        const streamStart = match.index + match[0].length;
-        const streamEnd = latin1Text.indexOf('endstream', streamStart);
-        if (streamEnd === -1) continue;
-
-        // Check the dictionary before the stream for /Filter
-        const dictStart = latin1Text.lastIndexOf('<<', match.index);
-        const dict = dictStart !== -1 ? latin1Text.substring(dictStart, match.index) : '';
-        const isFlate = dict.includes('/FlateDecode') || dict.includes('/Fl');
-
-        const streamBytes = bytes.subarray(streamStart, streamEnd);
-
-        let decodedStream = '';
-        if (isFlate) {
-            decodedStream = await decompressFlate(streamBytes);
-        } else {
-            decodedStream = new TextDecoder('latin1').decode(streamBytes);
-        }
-
-        if (decodedStream) {
-            accumulatedText += '\n' + decodedStream;
-            const items = extractTextItemsFromStream(decodedStream);
-            allTextItems.push(...items);
-        }
-    }
-
-    // 4. Construct table from extracted text items
-    let { headers, rows } = buildTableFromTextItems(allTextItems);
-
-    // If coordinate-based table extraction found nothing, try text-based parsing
-    if (rows.length === 0 && accumulatedText) {
-        const textTable = parseTextToTable(accumulatedText);
-        headers = textTable.headers;
-        rows = textTable.rows;
-    }
-
-    // Fallback if still empty: create placeholder structure from file info
-    if (headers.length === 0) {
-        headers = ['File Name', 'File Size', 'Pages', 'Status'];
-        rows = [{
-            'File Name': file.name,
-            'File Size': `${(file.size / 1024).toFixed(1)} KB`,
-            'Pages': `${pageCount} page(s)`,
-            'Status': 'Uploaded PDF Schedule'
-        }];
-    }
-
-    return {
+    if (rows.length > 0) {
+      return {
         fileName: file.name,
         fileSize: file.size,
         fileUrl,
@@ -351,6 +347,34 @@ export async function parsePdfTableFile(file: File): Promise<ParsedPdfTable> {
         rows,
         rowCount: rows.length,
         pageCount,
-        rawText: accumulatedText.substring(0, 2000),
-    };
+        rawText: fullText.substring(0, 5000),
+        totalAmount,
+      };
+    }
+  } catch (err) {
+    console.warn('pdf.js extraction fallback:', err);
+  }
+
+  // Fallback if parsing produces 0 rows
+  const fallbackHeaders = FIXED_HEADERS;
+  const fallbackRows = [{
+    'Item No': '1',
+    'Quantity': '-',
+    'Description': `Schedule document uploaded: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`,
+    'Unit': '-',
+    'Rate (Figures)': '-',
+    'Rate (Words)': '-',
+    'Amount': '-'
+  }];
+
+  return {
+    fileName: file.name,
+    fileSize: file.size,
+    fileUrl,
+    headers: fallbackHeaders,
+    rows: fallbackRows,
+    rowCount: fallbackRows.length,
+    pageCount: 1,
+    rawText: '',
+  };
 }
