@@ -26,6 +26,7 @@ import {
     type IssueRecord
 } from '@/services/issueService';
 import { calculatePcReportCounts } from '@/lib/pcReportUtils';
+import { probeBackend } from '@/lib/apiClient';
 import {
     fetchInventoryRecords
 } from '@/services/inventoryService';
@@ -691,13 +692,16 @@ export const SheetsProvider = ({ children }: { children: React.ReactNode }) => {
             }
         };
 
-        // Initial full load — this is the SINGLE canonical first fetch.
-        try {
-            updateAll();
-            lastRefreshedAt = Date.now();
-        } catch (e) {
-            toast.error('Something went wrong while fetching data');
-        }
+        // Initial full load — probe backend first so all 13 parallel fetches
+        // can short-circuit to mock instantly if no backend is running.
+        probeBackend().then(() => {
+            try {
+                updateAll();
+                lastRefreshedAt = Date.now();
+            } catch (e) {
+                toast.error('Something went wrong while fetching data');
+            }
+        });
 
         // Only start interval if this tab is currently active
         if (document.visibilityState === 'visible') {

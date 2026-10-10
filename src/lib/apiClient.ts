@@ -27,8 +27,26 @@ export const apiClient = axios.create({
   timeout: 800,
 });
 
-// Request interceptor to automatically remove default Content-Type header for FormData
+/**
+ * Fire a single cheap health-check with a 400ms timeout.
+ * If it fails (no backend running), marks the circuit open so all
+ * subsequent apiClient requests short-circuit to mock instantly.
+ * Call this once before the initial data load.
+ */
+export async function probeBackend(): Promise<void> {
+  if (isBackendDown()) return;
+  try {
+    await axios.get(`${getApiBaseUrl()}/health`, { timeout: 400, withCredentials: true });
+  } catch {
+    markBackendDown();
+  }
+}
+
+// Request interceptor: short-circuit immediately if backend is known to be down
 apiClient.interceptors.request.use((config) => {
+  if (isBackendDown()) {
+    return Promise.reject(Object.assign(new Error('Backend unavailable (circuit open)'), { __circuitOpen: true }));
+  }
   if (config.data instanceof FormData) {
     if (config.headers) {
       delete config.headers['Content-Type'];
