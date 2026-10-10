@@ -1,0 +1,3488 @@
+// Storage Manager - Handle all localStorage operations
+import toast from 'react-hot-toast';
+import { toInputDateFormat } from '@/lib/utils';
+
+const STORAGE_KEYS = {
+  USERS: 'pcb_users',
+  CREDITS: 'pcb_credits',
+  EXPENSES: 'pcb_expenses',
+  LEDGER: 'pcb_ledger',
+  SETTINGS: 'pcb_settings',
+  AUTH_USER: 'pcb_authUser',
+  VENDORS: 'pcb_vendors_v3',
+  COMPANIES: 'pcb_companies_v3',
+  ITEMS: 'pcb_items_v3',
+  GROUP_HEADS: 'pcb_group_heads_v3',
+  UOMS: 'pcb_uoms_v3',
+  DEPARTMENTS: 'pcb_departments_v3',
+  INDENTS: 'pcb_indents_v3',
+  POS: 'pcb_pos_v4',
+  TERMS_CONDITIONS: 'pcb_terms_conditions_v1',
+  LIFTING: 'pcb_lifting_v1',
+  STORE_IN: 'pcb_store_in_v1',
+  DIRECT_STORE_IN: 'pcb_direct_store_in_v1',
+  PAYMENTS: 'pcb_payments_v1',
+  REJECT_GRN: 'pcb_reject_grn_v1',
+  DEBIT_NOTES: 'pcb_debit_notes_v1',
+  TALLY_ENTRIES: 'pcb_tally_entries_v1',
+  BILL_NOT_RECEIVED: 'pcb_bill_not_received_v1',
+  STORE_ISSUES: 'pcb_store_issues_v1',
+  STORE_RETURNS: 'pcb_store_issue_returns_v1',
+  INVENTORY: 'pcb_inventory_v1',
+  QUOTATION_HISTORY: 'pcb_quotation_history_v1',
+  PROJECTS: 'pcb_projects_v1',
+  DESIGNS: 'pcb_designs_v1',
+  MATERIAL_REQUIREMENTS: 'pcb_material_requirements_v1',
+  EXECUTIONS: 'pcb_executions_v1',
+  ACTUALS: 'pcb_actuals_v1',
+  STAGE_ENTRIES: 'pcb_stage_entries_v1',
+  MOBILIZATION: 'pcb_mobilization_v1',
+  FINALIZE_CONSULTANT: 'pcb_finalize_consultant_v1',
+  SENT_PO: 'pcb_sent_po_v1',
+  SURVEY: 'pcb_survey_v1',
+  DRAWING_UPLOAD: 'pcb_drawing_upload_v1',
+  FINAL_APPROVAL: 'pcb_final_approval_v1',
+  DRAWINGS: 'pcb_drawings_v1',
+  MINORS: 'pcb_minors_v1',
+  SCHEDULES: 'pcb_schedules_v1',
+  RM_BILLS: 'pcb_rm_bills_v1',
+  EXTERNAL_POS: 'pcb_external_pos_v1',
+  PRODUCT_IMF: 'pcb_product_imf_v1',
+  DOCUMENTATION: 'pcb_documentation_v1',
+  EMAIL_LOGS: 'pcb_email_logs_v1'
+};
+
+// Keys left over from an old unrelated "Petty Cash System" template this app was built from.
+// None of these are read by any page in the actual PMS UI (confirmed by search) - they only
+// exist because early versions of this file auto-generated large dummy datasets for them.
+// Safe to wipe entirely to reclaim localStorage quota without touching real project data.
+const LEGACY_STORAGE_KEYS = [
+  STORAGE_KEYS.CREDITS, STORAGE_KEYS.EXPENSES, STORAGE_KEYS.LEDGER, STORAGE_KEYS.VENDORS,
+  STORAGE_KEYS.COMPANIES, STORAGE_KEYS.ITEMS, STORAGE_KEYS.GROUP_HEADS, STORAGE_KEYS.UOMS,
+  STORAGE_KEYS.DEPARTMENTS, STORAGE_KEYS.INDENTS, STORAGE_KEYS.POS, STORAGE_KEYS.TERMS_CONDITIONS,
+  STORAGE_KEYS.LIFTING, STORAGE_KEYS.STORE_IN, STORAGE_KEYS.DIRECT_STORE_IN, STORAGE_KEYS.PAYMENTS,
+  STORAGE_KEYS.REJECT_GRN, STORAGE_KEYS.DEBIT_NOTES, STORAGE_KEYS.TALLY_ENTRIES,
+  STORAGE_KEYS.BILL_NOT_RECEIVED, STORAGE_KEYS.STORE_ISSUES, STORAGE_KEYS.STORE_RETURNS,
+  STORAGE_KEYS.INVENTORY, STORAGE_KEYS.QUOTATION_HISTORY
+];
+
+// Human-readable labels for every key this app might have in localStorage, used by the
+// Settings > Storage usage breakdown.
+const STORAGE_KEY_LABELS = {
+  [STORAGE_KEYS.USERS]: 'Users',
+  [STORAGE_KEYS.SETTINGS]: 'App Settings',
+  [STORAGE_KEYS.AUTH_USER]: 'Logged-in Session',
+  [STORAGE_KEYS.PROJECTS]: 'Projects',
+  [STORAGE_KEYS.DESIGNS]: 'Design Data',
+  [STORAGE_KEYS.MATERIAL_REQUIREMENTS]: 'Material Requirements',
+  [STORAGE_KEYS.EXECUTIONS]: 'Execution Details',
+  [STORAGE_KEYS.ACTUALS]: 'Actual Details',
+  [STORAGE_KEYS.STAGE_ENTRIES]: 'Process Flow Stages',
+  [STORAGE_KEYS.MOBILIZATION]: 'Mobilization',
+  [STORAGE_KEYS.FINALIZE_CONSULTANT]: 'Finalize Consultant',
+  [STORAGE_KEYS.SENT_PO]: 'Sent PO (incl. uploaded PO documents)',
+  [STORAGE_KEYS.SURVEY]: 'Survey',
+  [STORAGE_KEYS.DRAWING_UPLOAD]: 'Drawing Upload (incl. uploaded files)',
+  [STORAGE_KEYS.FINAL_APPROVAL]: 'Final Approval',
+  [STORAGE_KEYS.DRAWINGS]: 'Upload Drawing (incl. uploaded files)',
+  [STORAGE_KEYS.MINORS]: 'Minors',
+  [STORAGE_KEYS.EXTERNAL_POS]: 'External PO System Master',
+  [STORAGE_KEYS.PRODUCT_IMF]: 'Product IMF (PO Items)'
+};
+LEGACY_STORAGE_KEYS.forEach(k => { STORAGE_KEY_LABELS[k] = 'Unused legacy data (safe to clear)'; });
+
+// Initialize default data
+const DEFAULT_USERS = [
+  { id: 'admin', name: 'Admin User', password: 'admin123', role: 'ADMIN', accessPages: [] },
+  { id: 'user', name: 'Employee 1', password: 'user123', role: 'USER', accessPages: [] },
+  { id: 'user2', name: 'Employee 2', password: 'user123', role: 'USER', accessPages: [] }
+];
+
+const DEFAULT_SETTINGS = {
+  groupHeads: ['IT', 'HR', 'Finance', 'Operations', 'Marketing'],
+  paymentModes: ['Cash', 'Cheque', 'Bank Transfer', 'Online Payment'],
+  lastSerialNumber: 0
+};
+
+const DEFAULT_CREDITS = [];
+const DEFAULT_EXPENSES = [];
+const DEFAULT_LEDGER = [];
+const DEFAULT_VENDORS = [];
+const DEFAULT_COMPANIES = [];
+
+export const initializeStorage = () => {
+  // Clear legacy data immediately to free up localStorage space
+  clearLegacyData();
+
+  if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(DEFAULT_USERS));
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.CREDITS)) {
+    localStorage.setItem(STORAGE_KEYS.CREDITS, JSON.stringify(DEFAULT_CREDITS));
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.EXPENSES)) {
+    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(DEFAULT_EXPENSES));
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.LEDGER)) {
+    localStorage.setItem(STORAGE_KEYS.LEDGER, JSON.stringify(DEFAULT_LEDGER));
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.VENDORS)) {
+    localStorage.setItem(STORAGE_KEYS.VENDORS, JSON.stringify(DEFAULT_VENDORS));
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.COMPANIES)) {
+    localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(DEFAULT_COMPANIES));
+  }
+
+};
+
+// Get data from storage
+export const getFromStorage = (key) => {
+  const data = localStorage.getItem(key);
+  return data ? JSON.parse(data) : null;
+};
+
+// Save data to storage
+export const saveToStorage = (key, data) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (err) {
+    if (err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014)) {
+      const freed = clearLegacyData();
+      if (freed > 0) {
+        try {
+          localStorage.setItem(key, JSON.stringify(data));
+          return;
+        } catch (retryErr) {
+          // If it still fails, drop images from data if present to save space
+          try {
+            const dataString = JSON.stringify(data);
+            // Rough size check - if still too big, notify
+            toast.error('Browser storage is full - could not save. Try removing old uploaded files/attachments to free up space.', { duration: 6000 });
+          } catch(e) {}
+        }
+      } else {
+        // Automatically try to delete oldest items from key if it's an array
+        if (Array.isArray(data) && data.length > 50) {
+           try {
+             // Keep only the newest 50 items
+             const trimmedData = data.slice(-50);
+             localStorage.setItem(key, JSON.stringify(trimmedData));
+             // react-hot-toast has no `.warn` - calling it here used to throw and
+             // skip this `return`, so the save "succeeded" but the caller still saw
+             // the original QuotaExceededError re-thrown below.
+             toast('Storage was full, so older records were removed to save new data.', { icon: '⚠️', duration: 5000 });
+             return;
+           } catch(trimErr) {
+              // Ignore
+           }
+        }
+        
+        toast.error('Browser storage is full - could not save. Try removing old uploaded files/attachments to free up space.', { duration: 6000 });
+      }
+    } else {
+      toast.error('Failed to save data');
+    }
+    throw err;
+  }
+};
+
+// Returns every pcb_* key currently in localStorage with its size in bytes and a human label,
+// largest first, plus the combined total - for the Settings > Storage usage panel.
+export const getStorageUsage = () => {
+  const rows = [];
+  let total = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith('pcb_')) continue;
+    const value = localStorage.getItem(key) || '';
+    const bytes = new Blob([value]).size;
+    total += bytes;
+    rows.push({
+      key,
+      label: STORAGE_KEY_LABELS[key] || key,
+      bytes,
+      isLegacy: LEGACY_STORAGE_KEYS.includes(key)
+    });
+  }
+  rows.sort((a, b) => b.bytes - a.bytes);
+  return { rows, total };
+};
+
+// Permanently removes the unused legacy "Petty Cash System" keys (see LEGACY_STORAGE_KEYS)
+// to reclaim localStorage quota. Does not touch any real project/pipeline data.
+export const clearLegacyData = () => {
+  let freedBytes = 0;
+  LEGACY_STORAGE_KEYS.forEach(key => {
+    const value = localStorage.getItem(key);
+    if (value) freedBytes += new Blob([value]).size;
+    localStorage.removeItem(key);
+  });
+  return freedBytes;
+};
+
+// Wipes every pcb_* key (all real project data), keeping only the logged-in session so the
+// current user isn't kicked out. Every getX() re-seeds its own defaults/dummy data on next
+// read, so the app comes back up clean. Used by Settings > Storage panel's "Reset All Data"
+// button so testers can reclaim quota and add a fresh batch of records without editing code.
+export const clearAllData = () => {
+  let freedBytes = 0;
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('pcb_') && key !== STORAGE_KEYS.AUTH_USER) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach(key => {
+    const value = localStorage.getItem(key);
+    if (value) freedBytes += new Blob([value]).size;
+    localStorage.removeItem(key);
+  });
+  return freedBytes;
+};
+
+// User operations
+export const getUsers = () => {
+  const users = getFromStorage(STORAGE_KEYS.USERS);
+  if (!users || !users.some(u => u.id === 'admin')) {
+    saveToStorage(STORAGE_KEYS.USERS, DEFAULT_USERS);
+    return DEFAULT_USERS;
+  }
+  return users;
+};
+export const saveUsers = (users) => saveToStorage(STORAGE_KEYS.USERS, users);
+
+export const upsertUser = (user) => {
+  const users = getUsers();
+  const idx = users.findIndex(u => u.id === user.id);
+  if (idx >= 0) {
+    users[idx] = { ...users[idx], ...user };
+  } else {
+    users.push({ accessPages: [], ...user });
+  }
+  saveUsers(users);
+  return users;
+};
+
+export const deleteUser = (id) => {
+  const users = getUsers().filter(u => u.id !== id);
+  saveUsers(users);
+  return users;
+};
+
+// Credits operations
+export const getCredits = () => {
+  const credits = getFromStorage(STORAGE_KEYS.CREDITS) || [];
+
+  // Seed dummy data if needed (less than 50 rows)
+  if (credits.length < 50) {
+    const recordsToCreate = 50 - credits.length;
+    let currentSnCount = credits.length > 0 ? parseInt(credits[credits.length - 1].sn.split('-')[1]) || 1000 : 1000;
+    const dummyCredits = [...credits];
+    const dummyLedger = getFromStorage(STORAGE_KEYS.LEDGER) || [];
+
+    // Seed backwards based on today's date
+    const baseDate = new Date();
+
+    for (let i = 0; i < recordsToCreate; i++) {
+      currentSnCount++;
+      const pName = ['John Doe', 'Jane Smith', 'Acme Corp', 'Admin User', 'Employee 1'][(i % 5)];
+      const mode = ['Cash', 'Cheque', 'Bank Transfer', 'Online'][(i % 4)];
+
+      const dateObj = new Date(baseDate.getTime() - ((recordsToCreate - i) * 86400000));
+      const dateStr = dateObj.toISOString().split('T')[0];
+
+      const creditId = `CRD-${Date.now()}-${currentSnCount}`;
+      const amount = (Math.floor(Math.random() * 50) + 1) * 100; // 100 to 5000
+
+      const newCredit = {
+        id: creditId,
+        sn: `SN-${currentSnCount}`,
+        personName: pName,
+        date: dateStr,
+        amount: amount,
+        paymentMode: mode,
+        image: '',
+        remarks: `Dummy seed record ${i + 1}`,
+        status: 'APPROVED',
+        timestamp: dateObj.toISOString()
+      };
+
+      dummyCredits.push(newCredit);
+
+      // Calculate current active balance for this person
+      let currentBalance = 0;
+      dummyLedger.filter(l => l.personName === pName).forEach(l => {
+        if (l.type === 'CREDIT') currentBalance += l.amount;
+        if (l.type === 'DEBIT') currentBalance -= l.amount;
+      });
+      currentBalance += amount;
+
+      dummyLedger.push({
+        id: `LDG-${Date.now()}-${currentSnCount}`,
+        personName: pName,
+        type: 'CREDIT',
+        amount: amount,
+        date: dateStr,
+        referenceId: creditId,
+        balance: currentBalance,
+        timestamp: dateObj.toISOString()
+      });
+    }
+
+    saveToStorage(STORAGE_KEYS.CREDITS, dummyCredits);
+    saveToStorage(STORAGE_KEYS.LEDGER, dummyLedger);
+
+    // Attempt to quickly refresh the page silently to grab the new changes
+    if (typeof window !== 'undefined' && dummyCredits.length >= 50 && credits.length < 50) {
+      setTimeout(() => window.location.reload(), 200);
+    }
+    return dummyCredits;
+  }
+
+  return credits;
+};
+export const saveCredits = (credits) => saveToStorage(STORAGE_KEYS.CREDITS, credits);
+export const saveCredit = (credit) => {
+  const credits = getCredits();
+  credits.push(credit);
+  saveCredits(credits);
+};
+export const getCreditById = (id) => {
+  const credits = getCredits();
+  return credits.find(c => c.id === id);
+};
+export const updateCredit = (updated) => {
+  const credits = getCredits();
+  const index = credits.findIndex(c => c.id === updated.id);
+  if (index !== -1) {
+    credits[index] = updated;
+    saveCredits(credits);
+  }
+};
+
+// Expenses operations
+export const getExpenses = () => {
+  const expenses = getFromStorage(STORAGE_KEYS.EXPENSES) || [];
+
+  // Seed dummy data if needed (less than 25 rows)
+  if (expenses.length < 25) {
+    const recordsToCreate = 25 - expenses.length;
+    let currentSnCount = expenses.length > 0 ? parseInt(expenses[expenses.length - 1].sn.split('-')[1]) || 2000 : 2000;
+    const dummyExpenses = [...expenses];
+    const dummyLedger = getFromStorage(STORAGE_KEYS.LEDGER) || [];
+
+    // Seed backwards based on today's date
+    const baseDate = new Date();
+
+    for (let i = 0; i < recordsToCreate; i++) {
+      currentSnCount++;
+      const pName = ['John Doe', 'Jane Smith', 'Acme Corp', 'Admin User', 'Employee 1'][(i % 5)];
+      const mode = ['Cash', 'Cheque', 'Bank Transfer', 'Online'][(i % 4)];
+      const group = ['IT', 'HR', 'Finance', 'Operations', 'Marketing'][(i % 5)];
+      // Mix of statuses
+      const status = i % 5 === 0 ? 'REJECTED' : (i % 2 === 0 ? 'APPROVED' : 'PENDING');
+
+      const dateObj = new Date(baseDate.getTime() - ((recordsToCreate - i) * 86400000));
+      const dateStr = dateObj.toISOString().split('T')[0];
+
+      const expenseId = `EXP-${Date.now()}-${currentSnCount}`;
+      const amount = (Math.floor(Math.random() * 15) + 1) * 100; // 100 to 1500
+
+      const newExpense = {
+        id: expenseId,
+        sn: `EXP-${currentSnCount}`,
+        personName: pName,
+        date: dateStr,
+        amount: amount,
+        paymentMode: mode,
+        groupHead: group,
+        image: '',
+        remarks: `Dummy expense record ${i + 1}`,
+        status: status,
+        timestamp: dateObj.toISOString()
+      };
+
+      dummyExpenses.push(newExpense);
+
+      // Calculate current active balance for this person if APPROVED
+      if (status === 'APPROVED') {
+        let currentBalance = 0;
+        dummyLedger.filter(l => l.personName === pName).forEach(l => {
+          if (l.type === 'CREDIT') currentBalance += l.amount;
+          if (l.type === 'EXPENSE') currentBalance -= l.amount;
+          if (l.type === 'DEBIT') currentBalance -= l.amount; // Just in case
+        });
+        currentBalance -= amount;
+
+        dummyLedger.push({
+          id: `LDG-${Date.now()}-${currentSnCount}`,
+          personName: pName,
+          type: 'EXPENSE', // Used in standard ledger additions
+          amount: amount,
+          date: dateStr,
+          referenceId: expenseId,
+          balance: currentBalance,
+          timestamp: dateObj.toISOString()
+        });
+      }
+    }
+
+    saveToStorage(STORAGE_KEYS.EXPENSES, dummyExpenses);
+    saveToStorage(STORAGE_KEYS.LEDGER, dummyLedger);
+
+    // Attempt to quickly refresh the page silently to grab the new changes
+    if (typeof window !== 'undefined' && dummyExpenses.length >= 25 && expenses.length < 25) {
+      setTimeout(() => window.location.reload(), 200);
+    }
+    return dummyExpenses;
+  }
+
+  return expenses;
+};
+export const saveExpenses = (expenses) => saveToStorage(STORAGE_KEYS.EXPENSES, expenses);
+export const saveExpense = (expense) => {
+  const expenses = getExpenses();
+  expenses.push(expense);
+  saveExpenses(expenses);
+};
+export const getExpenseById = (id) => {
+  const expenses = getExpenses();
+  return expenses.find(e => e.id === id);
+};
+export const updateExpense = (updated) => {
+  const expenses = getExpenses();
+  const index = expenses.findIndex(e => e.id === updated.id);
+  if (index !== -1) {
+    expenses[index] = updated;
+    saveExpenses(expenses);
+  }
+};
+
+// Ledger operations
+export const getLedger = () => getFromStorage(STORAGE_KEYS.LEDGER) || [];
+export const saveLedgers = (ledger) => saveToStorage(STORAGE_KEYS.LEDGER, ledger);
+export const saveLedger = (entry) => {
+  const ledger = getLedger();
+  ledger.push(entry);
+  saveLedgers(ledger);
+};
+
+// Settings operations
+export const getSettings = () => getFromStorage(STORAGE_KEYS.SETTINGS) || DEFAULT_SETTINGS;
+export const saveSettings = (settings) => saveToStorage(STORAGE_KEYS.SETTINGS, settings);
+
+// Auth operations
+export const getAuthUser = () => getFromStorage(STORAGE_KEYS.AUTH_USER);
+export const saveAuthUser = (user) => saveToStorage(STORAGE_KEYS.AUTH_USER, user);
+export const clearAuthUser = () => localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+
+// Vendor operations
+export const getVendors = () => {
+  const vendors = getFromStorage(STORAGE_KEYS.VENDORS) || [];
+  if (vendors.length < 50) {
+    const indianVendors = [
+      'Botivate', 'Reliance Industries', 'Infosys Tech', 'HDFC Services', 'ICICI Solutions',
+      'Wipro Limited', 'Bharti Airtel', 'Kotak Mahindra', 'Larsen & Toubro', 'Axis Bank',
+      'ITC Limited', 'State Bank of India', 'Hindustan Unilever', 'Maruti Suzuki', 'Asian Paints',
+      'Bajaj Finance', 'Sun Pharma', 'Titan Company', 'Mahindra & Mahindra', 'HCL Tech',
+      'Adani Ports', 'Ultratech Cement', 'Power Grid Corp', 'JSW Steel', 'NTPC Limited',
+      'ONGC India', 'Nestle India', 'Hindalco Industries', 'Bharat Petroleum', 'Grasim Industries',
+      'Tech Mahindra', 'IndusInd Bank', 'Britannia Industries', 'Coal India', 'Dr. Reddy Labs',
+      'Bajaj Auto', 'Botivate Steel', 'Hero MotoCorp', 'Eicher Motors', 'Gail India',
+      'Cipla Limited', 'Divis Labs', 'Shree Cement', 'UPL Limited', 'Apollo Hospitals',
+      'Godrej Consumer', 'Marico Limited', 'Bajaj Finserv', 'Pidilite Industries', 'Dabur India'
+    ];
+    const indianNames = [
+      'Rajesh Kumar', 'Priya Sharma', 'Amit Patel', 'Sneha Gupta', 'Vikram Singh',
+      'Anjali Verma', 'Suresh Iyer', 'Kavita Reddy', 'Manoj Bajpai', 'Rahul Dravid',
+      'Sachin Tendulkar', 'Sunil Gavaskar', 'Anil Kumble', 'Rohit Sharma', 'Virat Kohli',
+      'MS Dhoni', 'Ravindra Jadeja', 'Jasprit Bumrah', 'Hardik Pandya', 'KL Rahul',
+      'Rishabh Pant', 'Shikhar Dhawan', 'Cheteshwar Pujara', 'Ajinkya Rahane', 'R Ashwin',
+      'Mohammed Shami', 'Ishant Sharma', 'Umesh Yadav', 'Bhuvneshwar Kumar', 'Kuldeep Yadav',
+      'Yuzvendra Chahal', 'Shreyas Iyer', 'Ishan Kishan', 'Sanju Samson', 'Prithvi Shaw',
+      'Shubman Gill', 'Hanuma Vihari', 'Mayank Agarwal', 'Axar Patel', 'W Sundar',
+      'Shardul Thakur', 'Mohammed Siraj', 'T Natarajan', 'Deepak Chahar', 'Varun Chakravarthy',
+      'Prasidh Krishna', 'Arshdeep Singh', 'Umran Malik', 'Ravi Bishnoi', 'Avesh Khan'
+    ];
+
+    const recordsToCreate = 50 - vendors.length;
+    const dummyVendors = [...vendors];
+    const baseDate = new Date();
+    for (let i = 0; i < recordsToCreate; i++) {
+      const dateObj = new Date(baseDate.getTime() - ((recordsToCreate - i) * 3600000));
+      const sn = `VN-${String(dummyVendors.length + 1).padStart(3, '0')}`;
+      dummyVendors.push({
+        id: `VND-${Date.now()}-${i}`,
+        timestamp: dateObj.toISOString(),
+        vnNo: sn,
+        name: indianVendors[i % indianVendors.length],
+        gst: `${Math.floor(10 + Math.random() * 80)}AAAAA${Math.floor(1000 + Math.random() * 8000)}A1Z${Math.floor(Math.random() * 9)}`,
+        email: `contact@${indianVendors[i % indianVendors.length].toLowerCase().replace(/\s+/g, '')}.in`,
+        phone: `${9800000000 + Math.floor(Math.random() * 100000000)}`,
+        address: `${100 + i}, MG Road, Mumbai, Maharashtra`,
+        locationLink: `https://maps.google.com/?q=${19.0760 + (Math.random() - 0.5)},${72.8777 + (Math.random() - 0.5)}`,
+        responsiblePerson: indianNames[i % indianNames.length],
+        paymentTerms: [
+          `${15 + (i % 4) * 15} Days Credit`,
+          i % 3 === 0 ? '10% Advance' : 'Net 30',
+          i % 5 === 0 ? 'Special Discount 2%' : 'Standard terms',
+          i % 2 === 0 ? 'Partial Advance' : 'Credit Limit 50k'
+        ].slice(0, 2 + (i % 3))
+      });
+    }
+    saveToStorage(STORAGE_KEYS.VENDORS, dummyVendors);
+    return dummyVendors;
+  }
+
+  // DATA REPAIR: Ensure 2-4 terms for every vendor as requested
+  let needsSave = false;
+  const repairedVendors = vendors.map((v, i) => {
+    if (!v.paymentTerms || v.paymentTerms.length < 3) {
+      needsSave = true;
+      const additional = [
+        'Net 30',
+        '10% Advance',
+        'Partial Advance',
+        'Special Discount 2%'
+      ].filter(term => !v.paymentTerms?.includes(term));
+
+      const current = v.paymentTerms || ['30 Days Credit'];
+      const updated = [...current, ...additional].slice(0, 2 + (i % 3));
+      return { ...v, paymentTerms: updated };
+    }
+    return v;
+  });
+
+  if (needsSave) {
+    saveToStorage(STORAGE_KEYS.VENDORS, repairedVendors);
+    return repairedVendors;
+  }
+
+  // Migration: Ensure no legacy Tata vendors
+  let needsMigration = false;
+  const migrated = vendors.map(v => {
+    if (v.name.includes('Tata')) {
+      needsMigration = true;
+      return { ...v, name: v.name.replace('Tata', 'Botivate') };
+    }
+    return v;
+  });
+  if (needsMigration) {
+    saveToStorage(STORAGE_KEYS.VENDORS, migrated);
+    return migrated;
+  }
+
+  return vendors;
+};
+export const saveVendors = (vendors) => saveToStorage(STORAGE_KEYS.VENDORS, vendors);
+export const saveVendor = (vendor) => {
+  const vendors = getVendors();
+  vendors.push(vendor);
+  saveVendors(vendors);
+};
+
+// Company operations
+export const getCompanies = () => {
+  const companies = getFromStorage(STORAGE_KEYS.COMPANIES) || [];
+  if (companies.length < 1) {
+    const indianCompanies = ['Botivate Services'];
+    const indianNames = ['Rajesh Kumar'];
+
+    const dummyCompanies = [];
+    const dateObj = new Date();
+    const sn = `CN-001`;
+    dummyCompanies.push({
+      id: `CMP-${Date.now()}-0`,
+      timestamp: dateObj.toISOString(),
+      vnNo: sn,
+      name: indianCompanies[0],
+      gst: `27ABCDE1234A1Z5`,
+      pan: `ABCDE1234A`,
+      email: `info@tcs.com`,
+      phone: `9820012345`,
+      responsiblePerson: indianNames[0],
+      address: `Gateway Park, Mumbai, Maharashtra`,
+      billingAddress: `Gateway Park, HQ, Mumbai`,
+      destinationAddress: `Warehouse 1, Mumbai`
+    });
+    saveToStorage(STORAGE_KEYS.COMPANIES, dummyCompanies);
+    return dummyCompanies;
+  }
+  // Migration: Ensure no legacy Tata companies
+  let needsMigration = false;
+  const migrated = companies.map(c => {
+    if (c.name.includes('Tata') || c.name.includes('TCS')) {
+      needsMigration = true;
+      return { 
+        ...c, 
+        name: 'Botivate',
+        email: c.email.includes('tcs') ? 'info@botivate.com' : c.email
+      };
+    }
+    return c;
+  });
+  if (needsMigration) {
+    saveToStorage(STORAGE_KEYS.COMPANIES, migrated);
+    return migrated;
+  }
+
+  return companies;
+};
+export const saveCompanies = (companies) => saveToStorage(STORAGE_KEYS.COMPANIES, companies);
+export const saveCompany = (company) => {
+  const companies = getCompanies();
+  companies.push(company);
+  saveCompanies(companies);
+};
+
+// Export keys
+export { STORAGE_KEYS };
+
+// Item Functions
+export const getMasterItems = () => {
+  const items = getFromStorage(STORAGE_KEYS.ITEMS) || [];
+  if (items.length < 1) {
+    const groupHeads = getGroupHeads();
+    const uoms = getUOMs();
+    const dummyItems = Array.from({ length: 50 }, (_, i) => ({
+      id: `ITM-${Date.now()}-${i}`,
+      timestamp: new Date(Date.now() - i * 1800000).toISOString(),
+      inNo: `IN-${String(i + 1).padStart(3, '0')}`,
+      name: `Electronic Component ${i + 1}`,
+      groupHead: groupHeads[i % groupHeads.length]?.name || 'Electronics',
+      uom: uoms[i % uoms.length]?.name || 'PCS'
+    }));
+    saveToStorage(STORAGE_KEYS.ITEMS, dummyItems);
+    return dummyItems;
+  }
+  return items;
+};
+export const saveMasterItems = (items) => saveToStorage(STORAGE_KEYS.ITEMS, items);
+export const saveMasterItem = (item) => {
+  const items = getMasterItems();
+  items.push(item);
+  saveMasterItems(items);
+};
+
+// Group Head Functions
+export const getGroupHeads = () => {
+  const heads = getFromStorage(STORAGE_KEYS.GROUP_HEADS) || [];
+  if (heads.length < 1) {
+    const defaultHeads = ['Raw Materials', 'Packaging', 'Electronics', 'Chemicals', 'Stationery', 'Maintenance', 'Consumables', 'Services', 'Logistics', 'Marketing'];
+    const dummyHeads = defaultHeads.map((name, i) => ({
+      id: `GH-${Date.now()}-${i}`,
+      timestamp: new Date().toISOString(),
+      ghNo: `GH-${String(i + 1).padStart(3, '0')}`,
+      name
+    }));
+    saveToStorage(STORAGE_KEYS.GROUP_HEADS, dummyHeads);
+    return dummyHeads;
+  }
+  return heads;
+};
+export const saveGroupHeads = (data) => saveToStorage(STORAGE_KEYS.GROUP_HEADS, data);
+export const saveGroupHead = (item) => {
+  const data = getGroupHeads();
+  data.push(item);
+  saveGroupHeads(data);
+};
+
+// UOM Functions
+export const getUOMs = () => {
+  const uoms = getFromStorage(STORAGE_KEYS.UOMS) || [];
+  if (uoms.length < 1) {
+    const defaultUoms = ['PCS', 'KG', 'LTR', 'MTR', 'BOX'];
+    const dummyUoms = defaultUoms.map((name, i) => ({
+      id: `UOM-${Date.now()}-${i}`,
+      timestamp: new Date().toISOString(),
+      uomNo: `UOM-${String(i + 1).padStart(3, '0')}`,
+      name
+    }));
+    saveToStorage(STORAGE_KEYS.UOMS, dummyUoms);
+    return dummyUoms;
+  }
+  return uoms;
+};
+export const saveUOMs = (data) => saveToStorage(STORAGE_KEYS.UOMS, data);
+export const saveUOM = (item) => {
+  const data = getUOMs();
+  data.push(item);
+  saveUOMs(data);
+};
+
+// Department Functions
+export const getDepartments = () => {
+  const depts = getFromStorage(STORAGE_KEYS.DEPARTMENTS) || [];
+  if (depts.length < 1) {
+    const defaultDepts = ["Production", "Quality Assurance", "Human Resources", "Logistics", "Finance"];
+    const dummyDepts = defaultDepts.map((name, i) => ({
+      id: `DP-${Date.now()}-${i}`,
+      timestamp: new Date().toISOString(),
+      dpNo: `DP-${String(i + 1).padStart(3, '0')}`,
+      name: name
+    }));
+    saveToStorage(STORAGE_KEYS.DEPARTMENTS, dummyDepts);
+    return dummyDepts;
+  }
+  return depts;
+};
+export const saveDepartments = (data) => saveToStorage(STORAGE_KEYS.DEPARTMENTS, data);
+export const saveDepartment = (item) => {
+  const data = getDepartments();
+  data.push(item);
+  saveDepartments(data);
+};
+
+// Indent Functions
+export const getIndents = () => {
+  let indents = getFromStorage(STORAGE_KEYS.INDENTS) || [];
+  const DATA_VERSION = 'v8_ma_split'; // Increment this to force re-migration
+  const currentVersion = getFromStorage('indents_version');
+  
+  // Data Migration: Ensure Botivate branding and Approval Status on existing data
+  let needsMigration = false;
+  if (currentVersion !== DATA_VERSION) needsMigration = true;
+
+  let totalPendingFound = 0;
+  let vrPendingCount = 0;   // Indent Approved without vendorRateInfo → Vendor Rate Pending
+  let vrHistoryCount = 0;   // Indent Approved with vendorRateInfo  → Vendor Rate History
+  let taPendingCount = 0;   // Indent Approved with VR info but NO TA info → Technical Pending
+  let maPendingCount = 0;   // Indent Approved with TA info but NO MA info → Management Pending
+  const histVendors = ['Reliance Industries', 'Infosys Tech', 'Wipro Limited'];
+
+  const migrated = indents.map(indent => {
+    let updatedIndent = { ...indent };
+    let changed = false;
+
+    const updatedItems = indent.items.map(item => {
+      let status = item.approvalStatus;
+      let remarks = item.approvalRemarks || '';
+
+      if (needsMigration || !status) {
+        if (totalPendingFound < 15) {
+          status = 'PENDING';
+          remarks = '';
+          totalPendingFound++;
+        } else {
+          const isRejected = Math.random() > 0.85;
+          status = isRejected ? 'REJECTED' : 'APPROVED';
+          remarks = isRejected ? 'Insufficient stock in warehouse' : 'System Approved';
+          updatedIndent.items[indent.items.indexOf(item)].approvedAt = new Date().toISOString();
+        }
+        changed = true;
+      } else if (status === 'PENDING') {
+        totalPendingFound++;
+      }
+
+      const itemQty = item.itemQty && item.itemQty !== 1 ? item.itemQty : Math.floor(Math.random() * 95) + 5;
+      if (!item.itemQty || item.itemQty === 1) changed = true;
+
+      // 1. Assign vendorRateInfo (VR Split)
+      let vendorRateInfo = (needsMigration) ? undefined : item.vendorRateInfo;
+      if (needsMigration && status === 'APPROVED') {
+        if (vrPendingCount < 10) {
+          vrPendingCount++;
+          vendorRateInfo = undefined;
+        } else {
+          vrHistoryCount++;
+          const isThree = vrHistoryCount % 4 === 0;
+          const vCount = isThree ? 3 : 1;
+          vendorRateInfo = {
+            vendorType: isThree ? 'Three Party' : 'Regular',
+            vendorDetails: Array.from({ length: vCount }, (_, vi) => ({
+              name: histVendors[vi % histVendors.length],
+              quotationNo: `QT-${2000 + vrHistoryCount * 10 + vi}`,
+              quotationDate: new Date(Date.now() - vrHistoryCount * 86400000).toISOString().split('T')[0],
+              basicRate: String(Math.floor(Math.random() * 900 + 100)) + '.00',
+              paymentTerms: ['30 Days Credit', 'Net 30', '15 Days Credit'][vi % 3],
+              deliveryTime: String(7 + vi * 2),
+              make: ['Samsung', 'LG', 'Bosch'][vi % 3],
+              remarks: '', image: ''
+            })),
+            updatedAt: new Date(Date.now() - vrHistoryCount * 3600000).toISOString()
+          };
+        }
+      }
+
+      // 2. Assign technicalApproval (TA Split)
+      let technicalApproval = (needsMigration) ? undefined : item.technicalApproval;
+      if (needsMigration && vendorRateInfo) {
+        if (taPendingCount < 5) {
+          taPendingCount++;
+          technicalApproval = undefined;
+        } else {
+          const vd = vendorRateInfo.vendorDetails || [];
+          technicalApproval = {
+            t1: vd[0] ? { ...vd[0] } : null,
+            t2: vd[1] ? { ...vd[1] } : null,
+            t3: vd[2] ? { ...vd[2] } : null,
+            rankedAt: new Date(Date.now() - taPendingCount * 7200000).toISOString()
+          };
+        }
+      }
+
+      // 3. Assign managementApproval (MA Split: 5 Pending, rest History)
+      let managementApproval = (needsMigration) ? undefined : item.managementApproval;
+      if (needsMigration && technicalApproval) {
+        if (maPendingCount < 5) {
+          maPendingCount++;
+          managementApproval = undefined;
+        } else {
+          managementApproval = {
+            approvedVendor: technicalApproval.t1,
+            remarks: 'Management Approved for Purchase',
+            approvedAt: new Date(Date.now() - maPendingCount * 3600000).toISOString()
+          };
+        }
+      }
+
+      return { 
+        ...item, 
+        approvalStatus: status, 
+        approvalRemarks: remarks, 
+        approvedAt: item.approvedAt,
+        itemQty,
+        vendorRateInfo,
+        technicalApproval,
+        managementApproval
+      };
+    });
+
+    if (changed || needsMigration) {
+      updatedIndent.items = updatedItems;
+      needsMigration = true;
+    }
+
+    return updatedIndent;
+  });
+
+  if (needsMigration) {
+    saveToStorage(STORAGE_KEYS.INDENTS, migrated);
+    saveToStorage('indents_version', DATA_VERSION);
+    indents = migrated;
+  }
+  
+  if (indents.length < 50) {
+    const companies = getCompanies();
+    const depts = getDepartments();
+    const groupHeads = getGroupHeads();
+    const masterItems = getMasterItems();
+    const dummyIndents = [...indents];
+    const baseDate = new Date();
+
+    // Calculate how many pending we still need to reach 15
+    let currentPendingCount = dummyIndents.reduce((acc, ind) => 
+      acc + ind.items.filter(it => it.approvalStatus === 'PENDING').length, 0);
+
+    const recordsToCreate = 50 - indents.length;
+    let seedVrPendingCount = 0;
+    let seedVrHistoryCount = 0;
+    let seedTaPendingCount = 0;
+    let seedMaPendingCount = 0;
+    let seedPoPendingCount = 0;
+    let seedPoHistoryCount = 0;
+    const seedVendors = ['Reliance Industries', 'Infosys Tech', 'Wipro Limited'];
+
+    for (let i = 0; i < recordsToCreate; i++) {
+      const sn = `IN-${String(dummyIndents.length + 1).padStart(3, '0')}`;
+      const daysBack = Math.floor(i / (recordsToCreate / 30));
+      const dateObj = new Date(baseDate.getTime() - (daysBack * 86400000) - (Math.random() * 3600000)); 
+      const timestamp = `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()} ${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}:${String(dateObj.getSeconds()).padStart(2, '0')}`;
+
+      const itemCount = (i % 3) + 1;
+      const items = Array.from({ length: itemCount }, (_, idx) => {
+        const gh = groupHeads[idx % groupHeads.length]?.name || 'Electronics';
+        const filteredItems = masterItems.filter(m => m.groupHead === gh);
+        const item = filteredItems[idx % filteredItems.length] || masterItems[0];
+
+        let status = 'APPROVED';
+        let remarks = 'System Approved';
+        let approvedAt = null;
+        
+        if (currentPendingCount < 15) {
+          status = 'PENDING';
+          remarks = '';
+          currentPendingCount++;
+        } else {
+          if (Math.random() > 0.8) {
+            status = 'REJECTED';
+            remarks = 'Budget exceeded for this quarter';
+          }
+          const approvedDate = new Date(dateObj.getTime() + (Math.random() * 3600000 * 24));
+          approvedAt = approvedDate.toISOString();
+        }
+
+        // 1. VR
+        let seedVendorRateInfo = undefined;
+        if (status === 'APPROVED') {
+          if (seedVrPendingCount < 10) {
+            seedVrPendingCount++;
+          } else {
+            seedVrHistoryCount++;
+            const isThree = seedVrHistoryCount % 4 === 0;
+            const vCount = isThree ? 3 : 1;
+            seedVendorRateInfo = {
+              vendorType: isThree ? 'Three Party' : 'Regular',
+              vendorDetails: Array.from({ length: vCount }, (_, vi) => ({
+                name: seedVendors[vi % seedVendors.length],
+                quotationNo: `QT-${3000 + seedVrHistoryCount * 10 + vi}`,
+                quotationDate: new Date(Date.now() - seedVrHistoryCount * 86400000).toISOString().split('T')[0],
+                basicRate: String(Math.floor(Math.random() * 900 + 100)) + '.00',
+                paymentTerms: ['30 Days Credit', 'Net 30', '15 Days Credit'][vi % 3],
+                deliveryTime: String(7 + vi * 2),
+                make: ['Samsung', 'LG', 'Bosch'][vi % 3],
+                remarks: '', image: ''
+              })),
+              updatedAt: new Date(Date.now() - seedVrHistoryCount * 3600000).toISOString()
+            };
+          }
+        }
+
+        // 2. TA
+        let seedTechnicalApproval = undefined;
+        if (seedVendorRateInfo) {
+          if (seedTaPendingCount < 5) {
+            seedTaPendingCount++;
+          } else {
+            const vd = seedVendorRateInfo.vendorDetails;
+            seedTechnicalApproval = {
+              t1: vd[0] ? { ...vd[0] } : null,
+              t2: vd[1] ? { ...vd[1] } : null,
+              t3: vd[2] ? { ...vd[2] } : null,
+              rankedAt: new Date().toISOString()
+            };
+          }
+        }
+
+        // 3. MA
+        let seedManagementApproval = undefined;
+        if (seedTechnicalApproval) {
+          if (seedMaPendingCount < 5) {
+            seedMaPendingCount++;
+          } else {
+            seedManagementApproval = {
+              approvedVendor: seedTechnicalApproval.t1,
+              remarks: 'Bulk Seed Approval',
+              approvedAt: new Date().toISOString()
+            };
+          }
+        }
+
+        // 4. PO Stage
+        let poGenerated = false;
+        let poNumber = null;
+        if (seedManagementApproval) {
+          if (seedPoPendingCount < 4) {
+            seedPoPendingCount++;
+            poGenerated = false;
+          } else {
+            poGenerated = true;
+            poNumber = `Botivate/Store/26-27/${seedPoHistoryCount + 1}`;
+            seedPoHistoryCount++;
+          }
+        }
+
+        return {
+          department: depts[idx % depts.length]?.name || 'Production',
+          groupHead: gh,
+          itemName: item?.name || 'Standard Item',
+          uom: item?.uom || 'PCS',
+          itemQty: Math.floor(Math.random() * 50) + 1,
+          areaOfUse: ['Production Line A', 'Warehouse B', 'Admin Block', 'Maintenance Shed'][idx % 4],
+          attachment: '',
+          specification: `Spec details for ${item?.name}`,
+          itemCount: idx + 1,
+          approvalStatus: status,
+          approvalRemarks: remarks,
+          approvedAt,
+          vendorRateInfo: seedVendorRateInfo,
+          technicalApproval: seedTechnicalApproval,
+          managementApproval: seedManagementApproval,
+          poGenerated,
+          poNumber
+        };
+      });
+
+      dummyIndents.push({
+        id: `IND-${Date.now()}-${i}`,
+        serialNo: sn,
+        timestamp,
+        firmName: companies[0]?.name || 'Botivate',
+        indenterName: ['Rajesh Kumar', 'Amit Patel', 'Sneha Gupta'][i % 3],
+        indentStatus: i % 4 === 0 ? 'Critical' : 'Non-Critical',
+        items
+      });
+    }
+    saveToStorage(STORAGE_KEYS.INDENTS, dummyIndents);
+    return dummyIndents;
+  }
+
+  return indents;
+};
+
+export const saveIndents = (data) => saveToStorage(STORAGE_KEYS.INDENTS, data);
+
+export const saveIndent = (indent) => {
+  const data = getIndents();
+  data.push(indent);
+  saveIndents(data);
+};
+// PO Functions
+export const getPOs = () => {
+  const pos = getFromStorage(STORAGE_KEYS.POS) || [];
+  if (pos.length < 1) {
+    const companies = getCompanies();
+    const vendors = getVendors();
+    const dummyPOs = Array.from({ length: 20 }, (_, i) => {
+      const vendor = vendors[i % vendors.length];
+      const items = Array.from({ length: 2 }, (_, idx) => ({
+        id: `ITM-${Date.now()}-${i}-${idx}`,
+        productName: `Electronic Component ${Math.floor(Math.random() * 50) + 1}`,
+        specifications: 'Standard industrial grade',
+        quantity: Math.floor(Math.random() * 100) + 10,
+        rate: Math.floor(Math.random() * 500) + 100,
+        gst: 18,
+        discount: 0,
+        paymentTerm: '30 Days Credit',
+        unit: 'PCS'
+      }));
+
+      const subtotal = items.reduce((acc, it) => acc + (it.rate * it.quantity), 0);
+      const gst = subtotal * 0.18;
+
+      return {
+        id: `PO-${Date.now()}-${i}`,
+        poNumber: `Botivate/Store/26-27/${i + 1}`,
+        indentNo: `IN-${String(i + 1).padStart(3, '0')}`,
+        poDate: new Date(Date.now() - (20 - i) * 86400000).toISOString(),
+        supplierName: vendor.name,
+        supplierAddress: vendor.address,
+        gstin: vendor.gst,
+        companyEmail: vendor.email,
+        items,
+        subtotal,
+        totalGst: gst,
+        totalAmount: subtotal + gst,
+        preparedBy: 'System Admin',
+        approvedBy: 'Management',
+        companyName: companies[0]?.name || 'Botivate',
+        timestamp: new Date(Date.now() - (20 - i) * 86400000).toISOString()
+      };
+    });
+    saveToStorage(STORAGE_KEYS.POS, dummyPOs);
+    saveToStorage('pos_version', 'v2_indent_fix');
+    return dummyPOs;
+  }
+  return pos;
+};
+
+export const savePOs = (pos) => {
+  saveToStorage(STORAGE_KEYS.POS, pos);
+};
+
+export const savePO = (po) => {
+  const pos = getPOs();
+  pos.push(po);
+  savePOs(pos);
+};
+
+// Terms & Conditions Functions
+export const getTermsConditions = () => {
+  let terms = getFromStorage(STORAGE_KEYS.TERMS_CONDITIONS) || [];
+  if (terms.length < 1) {
+    const companies = getCompanies();
+    const botivate = companies.find(c => c.name === 'Botivate' || c.name === 'Botivate Services') || companies[0];
+    const companyName = botivate?.name || 'Botivate Services';
+    
+    const dummyTerms = [
+      "Payment within 30 days of invoice date.",
+      "Delivery within 2 weeks of purchase order.",
+      "Goods once sold will not be taken back.",
+      "All disputes subject to Mumbai jurisdiction.",
+      "Warranty for 1 year against manufacturing defects.",
+      "Prices are inclusive of all taxes unless specified.",
+      "Inspection to be done at our warehouse before dispatch.",
+      "Order cancellation subject to 10% restocking fee.",
+      "Interest at 18% p.a. for delayed payments.",
+      "Quantity tolerance of +/- 5% allowed.",
+      "Standard packaging included in price.",
+      "Quotations valid for 15 days only."
+    ];
+
+    const seeded = dummyTerms.map((text, i) => ({
+      id: `TC-${Date.now()}-${i}`,
+      timestamp: new Date(Date.now() - i * 3600000).toISOString(),
+      tcNo: `TC-001`,
+      termsNo: i + 1,
+      companyName: companyName,
+      content: text
+    }));
+
+    saveToStorage(STORAGE_KEYS.TERMS_CONDITIONS, seeded);
+    return seeded;
+  }
+
+  // FORCE REPAIR: Ensure all terms for the same company have the same TC number
+  let needsFix = false;
+  const companyMap = {};
+  const fixedTerms = terms.map(t => {
+    if (!companyMap[t.companyName]) {
+      companyMap[t.companyName] = t.tcNo;
+      return t;
+    }
+    if (t.tcNo !== companyMap[t.companyName]) {
+      needsFix = true;
+      return { ...t, tcNo: companyMap[t.companyName] };
+    }
+    return t;
+  });
+
+  if (needsFix) {
+    saveToStorage(STORAGE_KEYS.TERMS_CONDITIONS, fixedTerms);
+    return fixedTerms;
+  }
+
+  return terms;
+};
+
+export const saveTermsConditions = (data) => saveToStorage(STORAGE_KEYS.TERMS_CONDITIONS, data);
+export const saveTermsCondition = (item) => {
+  const data = getTermsConditions();
+  data.push(item);
+  saveTermsConditions(data);
+};
+// Lifting operations
+export const getLiftingRecords = () => {
+  const records = getFromStorage(STORAGE_KEYS.LIFTING) || [];
+  const DATA_VERSION = 'v5_botivate_services';
+  const currentVersion = getFromStorage('lifting_version');
+  
+  // Seed 17 dummy records for History if empty or version mismatch
+  if (records.length < 1 || currentVersion !== DATA_VERSION) {
+    const pos = getPOs();
+    const vendors = getVendors();
+    const dummyRecords = [];
+    
+    for (let i = 0; i < 17; i++) {
+      const po = pos[i % pos.length];
+      const item = po.items[0];
+      const dateObj = new Date(Date.now() - (17 - i) * 86400000);
+      
+      dummyRecords.push({
+        id: `LIFT-DUMMY-${i}`,
+        timestamp: dateObj.toISOString(),
+        poNumber: po.poNumber,
+        indentNo: po.indentNo || `IN-${String(i + 1).padStart(3, '0')}`,
+        firmName: 'Botivate Services',
+        projectName: 'PROJECT-' + (i + 1),
+        vendorName: po.supplierName,
+        billStatus: i % 2 === 0 ? 'Received' : 'Not Received',
+        billNumber: `BILL-${1000 + i}`,
+        billAmount: (item.rate * item.quantity * 1.18).toFixed(3),
+        billRemarks: 'Automatic dummy seed record',
+        challanNumber: `CHL-${500 + i}`,
+        transportation: 'Yes',
+        transporterName: 'Express Logistics',
+        vehicleNo: `MH-${12 + i}-AB-${1000 + i}`,
+        driverName: 'Rajesh Driver ' + (i + 1),
+        driverMobile: '98000123' + String(i).padStart(2, '0'),
+        frightAmount: '1500.00',
+        freightPaymentStatus: i >= 10 ? 'Paid' : 'Pending',
+        freightPaidAt: i >= 10 ? new Date(dateObj.getTime() + 86400000).toISOString() : null,
+        freightData: i >= 10 ? {
+            vehicleNumber: `MH-${12 + i}-AB-${1000 + i}`,
+            biltyNumber: `BLT-${7000 + i}`,
+            fromLocation: 'Warehouse A',
+            toLocation: 'Project Site ' + (i + 1),
+            rateType: 'Fixed',
+            freightAmount: '1500.00',
+            materialLoadDetails: 'Bulk construction material load'
+        } : null,
+        items: [
+          {
+            productName: item.productName,
+            rate: item.rate,
+            gst: item.gst,
+            effRate: item.rate * 1.18,
+            pendingQty: 0,
+            liftQty: item.quantity,
+            cancelQty: 0,
+            amount: item.rate * item.quantity * 1.18
+          }
+        ],
+        totalAmount: item.rate * item.quantity * 1.18
+      });
+    }
+    saveToStorage(STORAGE_KEYS.LIFTING, dummyRecords);
+    saveToStorage('lifting_version', DATA_VERSION);
+    return dummyRecords;
+  }
+  
+  return records;
+};
+export const saveLiftingRecords = (records) => saveToStorage(STORAGE_KEYS.LIFTING, records);
+export const saveLiftingRecord = (record) => {
+  const records = getLiftingRecords();
+  records.push({
+    ...record,
+    id: record.id || `LIFT-${Date.now()}`
+  });
+  saveLiftingRecords(records);
+};
+
+// Store In operations
+export const getStoreInRecords = () => {
+  const records = getFromStorage(STORAGE_KEYS.STORE_IN) || [];
+  const DATA_VERSION = 'v5_botivate_services';
+  const currentVersion = getFromStorage('store_in_version');
+  
+  // Seed more records if empty or if version mismatch (to force the 2-pending split)
+  if (records.length < 5 || currentVersion !== DATA_VERSION) {
+    const lifting = getLiftingRecords();
+    const dummy = lifting.map((lift, i) => {
+      // First 2 are pending, rest are history as requested
+      const isHistory = i >= 2;
+      return {
+        ...lift,
+        id: `STR-DUMMY-${i}`,
+        recQty: lift.items[0].liftQty,
+        physicalCheck: 'Pass',
+        qtyMatch: 'Yes',
+        priceMatch: 'Yes',
+        location: 'Main Warehouse Row ' + (i + 1),
+        timestamp: new Date(new Date(lift.timestamp).getTime() + 86400000).toISOString(),
+        // HOD fields
+        hodStatus: isHistory ? (i % 4 === 0 ? 'Rejected' : 'Approved') : 'Pending',
+        hodRemark: isHistory ? (i % 4 === 0 ? 'Quantity discrepancy in bill' : 'All items verified physically') : '',
+        hodApprovedAt: isHistory ? new Date(new Date(lift.timestamp).getTime() + 172800000).toISOString() : null
+      };
+    });
+    saveToStorage(STORAGE_KEYS.STORE_IN, dummy);
+    saveToStorage('store_in_version', DATA_VERSION);
+    return dummy;
+  }
+  return records;
+};
+export const saveStoreInRecords = (records) => saveToStorage(STORAGE_KEYS.STORE_IN, records);
+export const saveStoreInRecord = (record) => {
+  const records = getStoreInRecords();
+  records.push({ ...record, id: `STR-${Date.now()}` });
+  saveStoreInRecords(records);
+};
+
+// Direct Store In operations
+export const getDirectStoreInRecords = () => {
+  const records = getFromStorage(STORAGE_KEYS.DIRECT_STORE_IN) || [];
+  const DATA_VERSION = 'v2_firm_name';
+  const currentVersion = getFromStorage('direct_store_in_version');
+  
+  if (records.length < 1 || currentVersion !== DATA_VERSION) {
+    const vendors = getVendors();
+    const dummy = Array.from({ length: 12 }, (_, i) => ({
+      id: `DIR-DUMMY-${i}`,
+      firmName: 'Botivate Services',
+      projectName: 'GOAT MARKET',
+      receiverName: 'Receiver ' + (i + 1),
+      vendorName: vendors[i % vendors.length].name,
+      productName: 'Direct Item ' + (i + 1),
+      billStatus: i % 3 === 0 ? 'Not Received' : 'Received',
+      billNo: `DIR-BILL-${2000 + i}`,
+      billAmount: (500 + i * 100).toFixed(3),
+      receivingQty: (10 + i),
+      transportingType: 'Yes',
+      freightAmount: '500.00',
+      transporterName: 'Local Transport',
+      vehicleNo: `MH-15-TR-${3000 + i}`,
+      timestamp: new Date(Date.now() - i * 86400000).toISOString()
+    }));
+    saveToStorage(STORAGE_KEYS.DIRECT_STORE_IN, dummy);
+    saveToStorage('direct_store_in_version', DATA_VERSION);
+    return dummy;
+  }
+  return records;
+};
+export const saveDirectStoreInRecords = (records) => saveToStorage(STORAGE_KEYS.DIRECT_STORE_IN, records);
+export const saveDirectStoreInRecord = (record) => {
+  const records = getDirectStoreInRecords();
+  records.push({ ...record, id: `DIR-${Date.now()}` });
+  saveDirectStoreInRecords(records);
+};
+
+// Payment operations
+export const getPayments = () => {
+  const payments = getFromStorage(STORAGE_KEYS.PAYMENTS) || [];
+  const DATA_VERSION = 'v1_payments';
+  const currentVersion = getFromStorage('payments_version');
+
+  if (payments.length < 1 || currentVersion !== DATA_VERSION) {
+    const storeIn = getStoreInRecords().filter(r => r.hodStatus === 'Approved');
+    const direct = getDirectStoreInRecords();
+    
+    const dummy = [];
+    let paymentCount = 0;
+
+    // Seed some payments for Store In
+    storeIn.slice(0, 5).forEach((record, i) => {
+      paymentCount++;
+      dummy.push({
+        id: `PAY-${Date.now()}-${paymentCount}`,
+        referenceId: record.id,
+        referenceType: 'STORE_IN',
+        timestamp: new Date(Date.now() - i * 86400000).toISOString(),
+        paymentNo: `PAY-2026-${String(paymentCount).padStart(3, '0')}`,
+        paymentCount: 1,
+        paidAmount: record.totalAmount || record.billAmount || 1500,
+        pendingAmount: 0,
+        paymentStatus: 'Paid',
+        attachment: '',
+        remarks: 'Dummy seeded payment for Store In'
+      });
+    });
+
+    // Seed some payments for Direct Store In
+    direct.slice(0, 3).forEach((record, i) => {
+      paymentCount++;
+      dummy.push({
+        id: `PAY-${Date.now()}-${paymentCount}`,
+        referenceId: record.id,
+        referenceType: 'DIRECT_STORE_IN',
+        timestamp: new Date(Date.now() - i * 86400000).toISOString(),
+        paymentNo: `PAY-2026-${String(paymentCount).padStart(3, '0')}`,
+        paymentCount: 1,
+        paidAmount: record.billAmount || 500,
+        pendingAmount: 0,
+        paymentStatus: 'Paid',
+        attachment: '',
+        remarks: 'Dummy seeded payment for Direct Store In'
+      });
+    });
+
+    saveToStorage(STORAGE_KEYS.PAYMENTS, dummy);
+    saveToStorage('payments_version', DATA_VERSION);
+    return dummy;
+  }
+  return payments;
+};
+export const savePayments = (records) => saveToStorage(STORAGE_KEYS.PAYMENTS, records);
+export const savePayment = (record) => {
+  const records = getPayments();
+  records.push({ ...record, id: `PAY-${Date.now()}` });
+  savePayments(records);
+};
+
+// Reject GRN Operations
+export const getRejectGRNRecords = () => {
+  const records = getFromStorage(STORAGE_KEYS.REJECT_GRN) || [];
+  const DATA_VERSION = 'v1_reject_grn';
+  const currentVersion = getFromStorage('reject_grn_version');
+
+  if (records.length < 1 || currentVersion !== DATA_VERSION) {
+    const storeIn = getStoreInRecords().filter(r => r.hodStatus === 'Rejected');
+    const dummy = [];
+
+    // Seed some history records
+    storeIn.slice(0, 2).forEach((record, i) => {
+      dummy.push({
+        id: `RGRN-${Date.now()}-${i}`,
+        referenceId: record.id,
+        timestamp: new Date(Date.now() - i * 86400000).toISOString(),
+        grnStatus: 'Reject',
+        reason: 'Quantity mismatch is severe',
+        debitNoteSent: 'Yes',
+        attachment: ''
+      });
+    });
+
+    saveToStorage(STORAGE_KEYS.REJECT_GRN, dummy);
+    saveToStorage('reject_grn_version', DATA_VERSION);
+    return dummy;
+  }
+  return records;
+};
+
+export const saveRejectGRNRecords = (records) => saveToStorage(STORAGE_KEYS.REJECT_GRN, records);
+export const saveRejectGRNRecord = (record) => {
+  const records = getRejectGRNRecords();
+  records.push({ ...record, id: `RGRN-${Date.now()}` });
+  saveRejectGRNRecords(records);
+};
+
+// Debit Note Operations
+export const getDebitNotes = () => {
+  const records = getFromStorage(STORAGE_KEYS.DEBIT_NOTES) || [];
+  const DATA_VERSION = 'v1_debit_notes';
+  const currentVersion = getFromStorage('debit_notes_version');
+
+  if (records.length < 1 || currentVersion !== DATA_VERSION) {
+    const lifting = getLiftingRecords();
+    const dummy = [];
+
+    lifting.slice(0, 5).forEach((record, i) => {
+      dummy.push({
+        id: `DN-${Date.now()}-${i}`,
+        liftNumber: record.id || `LIFT-DUMMY-${i}`,
+        indentNo: record.indentNo || `IN-${String(i + 1).padStart(3, '0')}`,
+        projectName: record.projectName || record.firmName || 'Botivate',
+        firmName: record.firmName || 'Botivate Services',
+        billNo: record.billNumber || `BILL-${1000 + i}`,
+        vendorName: record.vendorName,
+        productName: record.items?.[0]?.productName || 'Electronic Component',
+        qty: record.items?.[0]?.liftQty || 50,
+        typeOfBill: 'Tax Invoice',
+        billAmount: record.billAmount || '1500.00',
+        paymentType: '30 Days Credit',
+        advanceAmount: '₹0.00',
+        photoOfBill: '',
+        transportation: 'Yes',
+        transporterName: record.transporterName || 'Express Logistics',
+        amount: record.totalAmount || record.billAmount || '1500.00',
+        reason: 'Material rejected due to physical check failure',
+        plannedDate: '22/05/2026',
+        debitNoteNo: `DN-2026-${String(i + 1).padStart(3, '0')}`,
+        debitNoteCopy: 'debit_note_copy.pdf',
+        status: 'Sent',
+        statusPurchaser: 'Approved',
+        billCopy: 'bill_copy.pdf',
+        returnCopy: 'return_challan.pdf',
+        timestamp: new Date(Date.now() - (i + 1) * 86400000).toISOString()
+      });
+    });
+
+    saveToStorage(STORAGE_KEYS.DEBIT_NOTES, dummy);
+    saveToStorage('debit_notes_version', DATA_VERSION);
+    return dummy;
+  }
+  return records;
+};
+
+export const saveDebitNotes = (records) => saveToStorage(STORAGE_KEYS.DEBIT_NOTES, records);
+export const saveDebitNote = (record) => {
+  const records = getDebitNotes();
+  records.push({
+    ...record,
+    id: record.id || `DN-${Date.now()}`,
+    timestamp: new Date().toISOString()
+  });
+  saveDebitNotes(records);
+};
+
+// Tally & Audit Data Operations
+export const getTallyEntries = () => {
+  const records = getFromStorage(STORAGE_KEYS.TALLY_ENTRIES) || [];
+  const DATA_VERSION = 'v1_tally_entries';
+  const currentVersion = getFromStorage('tally_entries_version');
+
+  if (records.length < 1 || currentVersion !== DATA_VERSION) {
+    const dummy = [
+      {
+        id: 'TALLY-101',
+        indentNumber: 'IN-001',
+        indentDate: '2026-05-01T09:00:00Z',
+        purchaseDate: '2026-05-02T10:00:00Z',
+        materialInDate: '2026-05-04T12:00:00Z',
+        plannedDate: '2026-05-15T09:00:00Z',
+        productName: 'Cement OPC 53 Grade',
+        firmNameMatch: 'Pratap Engineering Site A',
+        billNo: 'BILL-9982',
+        qty: 150,
+        partyName: 'UltraTech Cement Ltd',
+        billAmt: 67500.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Main Warehouse A',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Foundations Block 1',
+        indentedFor: 'Slab reinforcement',
+        approvedPartyName: 'UltraTech Cement Ltd',
+        rate: 450.00,
+        indentQty: 150,
+        totalRate: 67500.00,
+        liftNumber: 'LIFT-8821',
+        poNumber: 'PO-2026-101',
+        currentStage: 'AUDIT',
+        isCompleted: false,
+        planned1: '2026-05-15T09:00:00Z',
+        actual1: '',
+        status1: '',
+        remarks1: '',
+        planned2: '',
+        actual2: '',
+        status2: '',
+        remarks2: '',
+        planned3: '',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '',
+        actual4: '',
+        status4: '',
+        remarks4: '',
+        planned5: '',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-04T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Audit looks clean.',
+        receivingStatus: 'Received',
+        receivedQuantity: 150
+      },
+      {
+        id: 'TALLY-102',
+        indentNumber: 'IN-002',
+        indentDate: '2026-05-02T09:00:00Z',
+        purchaseDate: '2026-05-03T10:00:00Z',
+        materialInDate: '2026-05-05T12:00:00Z',
+        plannedDate: '2026-05-16T10:00:00Z',
+        productName: 'Reinforcement Steel 12mm',
+        firmNameMatch: 'Botivate Products Site B',
+        billNo: 'BILL-4451',
+        qty: 500,
+        partyName: 'Tata Steel Ltd',
+        billAmt: 275000.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Central Yard B',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Block 2 Columns',
+        indentedFor: 'Core columns',
+        approvedPartyName: 'Tata Steel Ltd',
+        rate: 550.00,
+        indentQty: 500,
+        totalRate: 275000.00,
+        liftNumber: 'LIFT-2291',
+        poNumber: 'PO-2026-102',
+        currentStage: 'AUDIT',
+        isCompleted: false,
+        planned1: '2026-05-16T10:00:00Z',
+        actual1: '',
+        status1: '',
+        remarks1: '',
+        planned2: '',
+        actual2: '',
+        status2: '',
+        remarks2: '',
+        planned3: '',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '',
+        actual4: '',
+        status4: '',
+        remarks4: '',
+        planned5: '',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-05T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Matches PO values.',
+        receivingStatus: 'Received',
+        receivedQuantity: 500
+      },
+      {
+        id: 'TALLY-103',
+        indentNumber: 'IN-003',
+        indentDate: '2026-05-03T09:00:00Z',
+        purchaseDate: '2026-05-04T10:00:00Z',
+        materialInDate: '2026-05-06T12:00:00Z',
+        plannedDate: '2026-05-12T09:00:00Z',
+        productName: 'Electrical Conduit Pipe 25mm',
+        firmNameMatch: 'Pratap Engineering Site A',
+        billNo: 'BILL-2231',
+        qty: 120,
+        partyName: 'Havells India Ltd',
+        billAmt: 14400.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Main Warehouse A',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Block 1 Basements',
+        indentedFor: 'Basement wiring',
+        approvedPartyName: 'Havells India Ltd',
+        rate: 120.00,
+        indentQty: 120,
+        totalRate: 14400.00,
+        liftNumber: 'LIFT-8872',
+        poNumber: 'PO-2026-103',
+        currentStage: 'RECTIFY',
+        isCompleted: false,
+        planned1: '2026-05-10T09:00:00Z',
+        actual1: '2026-05-11T11:00:00Z',
+        status1: 'Not Done',
+        remarks1: 'Price on invoice varies from PO rate. Requires supplier rectification.',
+        planned2: '2026-05-12T09:00:00Z',
+        actual2: '',
+        status2: '',
+        remarks2: '',
+        planned3: '',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '',
+        actual4: '',
+        status4: '',
+        remarks4: '',
+        planned5: '',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-06T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'No',
+        hodStatus: 'Pending',
+        hodRemark: 'Needs rate adjustment.',
+        receivingStatus: 'Received',
+        receivedQuantity: 120
+      },
+      {
+        id: 'TALLY-104',
+        indentNumber: 'IN-004',
+        indentDate: '2026-05-04T09:00:00Z',
+        purchaseDate: '2026-05-05T10:00:00Z',
+        materialInDate: '2026-05-07T12:00:00Z',
+        plannedDate: '2026-05-13T09:00:00Z',
+        productName: 'PVC Pipes 4-inch',
+        firmNameMatch: 'BuildCon Solutions',
+        billNo: 'BILL-1109',
+        qty: 80,
+        partyName: 'Supreme Industries',
+        billAmt: 24000.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Plumbing Bay',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Drainage Phase 1',
+        indentedFor: 'Main outlet drain',
+        approvedPartyName: 'Supreme Industries',
+        rate: 300.00,
+        indentQty: 100,
+        totalRate: 30000.00,
+        liftNumber: 'LIFT-0091',
+        poNumber: 'PO-2026-104',
+        currentStage: 'RECTIFY',
+        isCompleted: false,
+        planned1: '2026-05-11T09:00:00Z',
+        actual1: '2026-05-12T14:30:00Z',
+        status1: 'Not Done',
+        remarks1: 'Quantity is 20 short in bill. Need credit note or bill correction.',
+        planned2: '2026-05-13T09:00:00Z',
+        actual2: '',
+        status2: '',
+        remarks2: '',
+        planned3: '',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '',
+        actual4: '',
+        status4: '',
+        remarks4: '',
+        planned5: '',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-07T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'No',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Bill count is short.',
+        receivingStatus: 'Received',
+        receivedQuantity: 80
+      },
+      {
+        id: 'TALLY-105',
+        indentNumber: 'IN-005',
+        indentDate: '2026-05-05T09:00:00Z',
+        purchaseDate: '2026-05-06T10:00:00Z',
+        materialInDate: '2026-05-08T12:00:00Z',
+        plannedDate: '2026-05-11T09:00:00Z',
+        productName: 'Submersible Pump 5HP',
+        firmNameMatch: 'Pratap Engineering Site A',
+        billNo: 'BILL-8812',
+        qty: 2,
+        partyName: 'Kirloskar Brothers Ltd',
+        billAmt: 90000.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Pump House 1',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Borewell 2',
+        indentedFor: 'Site dewatering',
+        approvedPartyName: 'Kirloskar Brothers Ltd',
+        rate: 45000.00,
+        indentQty: 2,
+        totalRate: 90000.00,
+        liftNumber: 'LIFT-4432',
+        poNumber: 'PO-2026-105',
+        currentStage: 'REAUDIT',
+        isCompleted: false,
+        planned1: '2026-05-08T09:00:00Z',
+        actual1: '2026-05-09T10:00:00Z',
+        status1: 'Not Done',
+        remarks1: 'Missing manual warranty/challan copy in attachments.',
+        planned2: '2026-05-09T12:00:00Z',
+        actual2: '2026-05-10T11:30:00Z',
+        status2: 'Done',
+        remarks2: 'Supplier provided warranty certificate scan, uploaded to folder.',
+        planned3: '2026-05-11T09:00:00Z',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '',
+        actual4: '',
+        status4: '',
+        remarks4: '',
+        planned5: '',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-08T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Warranty verified.',
+        receivingStatus: 'Received',
+        receivedQuantity: 2
+      },
+      {
+        id: 'TALLY-106',
+        indentNumber: 'IN-006',
+        indentDate: '2026-05-06T09:00:00Z',
+        purchaseDate: '2026-05-07T10:00:00Z',
+        materialInDate: '2026-05-09T12:00:00Z',
+        plannedDate: '2026-05-12T09:00:00Z',
+        productName: 'Structural I-Beams',
+        firmNameMatch: 'Botivate Products Site B',
+        billNo: 'BILL-6609',
+        qty: 12,
+        partyName: 'Jindal Steel & Power',
+        billAmt: 420000.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Heavy Storage Zone',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Roof Truss Block C',
+        indentedFor: 'Structural columns Frame',
+        approvedPartyName: 'Jindal Steel & Power',
+        rate: 35000.00,
+        indentQty: 12,
+        totalRate: 420000.00,
+        liftNumber: 'LIFT-9912',
+        poNumber: 'PO-2026-106',
+        currentStage: 'TALLY_ENTRY',
+        isCompleted: false,
+        planned1: '2026-05-10T09:00:00Z',
+        actual1: '2026-05-11T12:00:00Z',
+        status1: 'Done',
+        remarks1: 'Dimensions and weight verified by technical team.',
+        planned2: '',
+        actual2: '',
+        status2: '',
+        remarks2: '',
+        planned3: '',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '2026-05-12T09:00:00Z',
+        actual4: '',
+        status4: '',
+        remarks4: '',
+        planned5: '',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-09T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Excellent grade steel.',
+        receivingStatus: 'Received',
+        receivedQuantity: 12
+      },
+      {
+        id: 'TALLY-107',
+        indentNumber: 'IN-007',
+        indentDate: '2026-05-07T09:00:00Z',
+        purchaseDate: '2026-05-08T10:00:00Z',
+        materialInDate: '2026-05-10T12:00:00Z',
+        plannedDate: '2026-05-11T09:00:00Z',
+        productName: 'Galvanized Cable Trays',
+        firmNameMatch: 'Pratap Engineering Site A',
+        billNo: 'BILL-3312',
+        qty: 60,
+        partyName: 'Legrand India',
+        billAmt: 48000.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Main Warehouse A',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Block 2 Electrical Rooms',
+        indentedFor: 'HVAC power cables support',
+        approvedPartyName: 'Legrand India',
+        rate: 800.00,
+        indentQty: 60,
+        totalRate: 48000.00,
+        liftNumber: 'LIFT-0028',
+        poNumber: 'PO-2026-107',
+        currentStage: 'TALLY_ENTRY',
+        isCompleted: false,
+        planned1: '2026-05-05T09:00:00Z',
+        actual1: '2026-05-06T10:00:00Z',
+        status1: 'Not Done',
+        remarks1: 'Requires project manager dual signature on physical copy.',
+        planned2: '2026-05-07T09:00:00Z',
+        actual2: '2026-05-08T15:00:00Z',
+        status2: 'Done',
+        remarks2: 'Signature obtained and verified.',
+        planned3: '2026-05-09T09:00:00Z',
+        actual3: '2026-05-10T11:00:00Z',
+        status3: 'Done',
+        remarks3: 'Re-audit passed successfully.',
+        planned4: '2026-05-11T09:00:00Z',
+        actual4: '',
+        status4: '',
+        remarks4: '',
+        planned5: '',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-10T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Signed physical copy received.',
+        receivingStatus: 'Received',
+        receivedQuantity: 60
+      },
+      {
+        id: 'TALLY-108',
+        indentNumber: 'IN-008',
+        indentDate: '2026-05-08T09:00:00Z',
+        purchaseDate: '2026-05-09T10:00:00Z',
+        materialInDate: '2026-05-11T12:00:00Z',
+        plannedDate: '2026-05-10T09:00:00Z',
+        productName: 'Led Tube Lights 20W',
+        firmNameMatch: 'Botivate Products Site B',
+        billNo: 'BILL-4491',
+        qty: 300,
+        partyName: 'Philips Lighting',
+        billAmt: 60000.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Electrical Bay B',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Office building internal',
+        indentedFor: 'Main ceiling lights',
+        approvedPartyName: 'Philips Lighting',
+        rate: 200.00,
+        indentQty: 300,
+        totalRate: 60000.00,
+        liftNumber: 'LIFT-3819',
+        poNumber: 'PO-2026-108',
+        currentStage: 'AGAIN_AUDIT',
+        isCompleted: false,
+        planned1: '2026-05-06T09:00:00Z',
+        actual1: '2026-05-07T10:00:00Z',
+        status1: 'Done',
+        remarks1: 'Audit clear. Lighting specs checked.',
+        planned2: '',
+        actual2: '',
+        status2: '',
+        remarks2: '',
+        planned3: '',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '2026-05-08T09:00:00Z',
+        actual4: '2026-05-09T13:00:00Z',
+        status4: 'Done',
+        remarks4: 'ERP logged. Voucher #T-5591.',
+        planned5: '2026-05-10T09:00:00Z',
+        actual5: '',
+        status5: '',
+        remarks5: '',
+        timestamp: '2026-05-11T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Voucher verified.',
+        receivingStatus: 'Received',
+        receivedQuantity: 300
+      },
+      {
+        id: 'TALLY-109',
+        indentNumber: 'IN-009',
+        indentDate: '2026-05-01T09:00:00Z',
+        purchaseDate: '2026-05-02T10:00:00Z',
+        materialInDate: '2026-05-03T12:00:00Z',
+        plannedDate: '2026-05-05T09:00:00Z',
+        productName: 'Ready Mix Concrete M25',
+        firmNameMatch: 'BuildCon Solutions',
+        billNo: 'BILL-0992',
+        qty: 50,
+        partyName: 'Lafarge Holcim',
+        billAmt: 195000.00,
+        billImage: '',
+        billReceivedLater: 'No',
+        location: 'Foundation Block C',
+        typeOfBills: 'Tax Invoice',
+        productImage: '',
+        area: 'Ground slab foundations',
+        indentedFor: 'Main structural floor',
+        approvedPartyName: 'Lafarge Holcim',
+        rate: 3900.00,
+        indentQty: 50,
+        totalRate: 195000.00,
+        liftNumber: 'LIFT-1102',
+        poNumber: 'PO-2026-109',
+        currentStage: 'COMPLETED',
+        isCompleted: true,
+        planned1: '2026-05-01T09:00:00Z',
+        actual1: '2026-05-02T10:00:00Z',
+        status1: 'Done',
+        remarks1: 'Slab casting successful. Cube test results attached.',
+        planned2: '',
+        actual2: '',
+        status2: '',
+        remarks2: '',
+        planned3: '',
+        actual3: '',
+        status3: '',
+        remarks3: '',
+        planned4: '2026-05-03T09:00:00Z',
+        actual4: '2026-05-04T12:00:00Z',
+        status4: 'Done',
+        remarks4: 'Tally Entry complete under voucher #V-11883.',
+        planned5: '2026-05-05T09:00:00Z',
+        actual5: '2026-05-06T15:00:00Z',
+        status5: 'okay',
+        remarks5: 'Final audit check passed. Perfect matching.',
+        timestamp: '2026-05-03T12:00:00Z',
+        damageOrder: 'Yes',
+        quantityAsPerBill: 'Yes',
+        priceAsPerPoCheck: 'Yes',
+        hodStatus: 'Approved',
+        hodRemark: 'Cube test verified.',
+        receivingStatus: 'Received',
+        receivedQuantity: 50
+      }
+    ];
+
+    saveToStorage(STORAGE_KEYS.TALLY_ENTRIES, dummy);
+    saveToStorage('tally_entries_version', DATA_VERSION);
+    return dummy;
+  }
+  return records;
+};
+
+export const saveTallyEntries = (records) => saveToStorage(STORAGE_KEYS.TALLY_ENTRIES, records);
+
+export const updateTallyEntry = (id, updates) => {
+  const records = getTallyEntries();
+  const index = records.findIndex(r => r.id === id || String(r.id) === String(id));
+  if (index !== -1) {
+    const item = { ...records[index], ...updates };
+
+    // Dynamically transition stages
+    const hasValue = (val) => val !== undefined && val !== null && val !== '' && String(val).trim() !== '';
+    const isAuditDone = String(item.status1 || '').toLowerCase() === 'done';
+
+    if (hasValue(item.actual5)) {
+      item.currentStage = 'COMPLETED';
+      item.isCompleted = true;
+    } else if (hasValue(item.actual4)) {
+      item.currentStage = 'AGAIN_AUDIT';
+      if (!hasValue(item.planned5)) {
+        item.planned5 = new Date().toISOString();
+      }
+    } else if (hasValue(item.actual3)) {
+      item.currentStage = 'TALLY_ENTRY';
+      if (!hasValue(item.planned4)) {
+        item.planned4 = new Date().toISOString();
+      }
+    } else if (hasValue(item.actual2)) {
+      item.currentStage = 'REAUDIT';
+      if (!hasValue(item.planned3)) {
+        item.planned3 = new Date().toISOString();
+      }
+    } else if (hasValue(item.actual1)) {
+      if (isAuditDone) {
+        item.currentStage = 'TALLY_ENTRY';
+        if (!hasValue(item.planned4)) {
+          item.planned4 = new Date().toISOString();
+        }
+      } else {
+        item.currentStage = 'RECTIFY';
+        if (!hasValue(item.planned2)) {
+          item.planned2 = new Date().toISOString();
+        }
+      }
+    } else {
+      item.currentStage = 'AUDIT';
+    }
+
+    records[index] = item;
+    saveTallyEntries(records);
+    return item;
+  }
+  return null;
+};
+
+// --- Bill Not Received Operations ---
+export const getBillNotReceived = () => {
+  const data = getFromStorage(STORAGE_KEYS.BILL_NOT_RECEIVED);
+  if (!data) {
+    const dummy = [
+      {
+        id: "LIFT-2911",
+        indentNumber: "IND-9912",
+        poNumber: "PO-2026-0911",
+        vendorName: "Prism Johnson Cement",
+        projectName: "Pratap Site A",
+        productName: "OPC 53 Cement",
+        billStatus: "Pending",
+        plannedDate: "2026-05-18",
+        billNo: "",
+        qty: 250,
+        leadTime: "3 Days",
+        typeOfBill: "GST Tax Invoice",
+        billAmount: 112500,
+        discountAmount: 2500,
+        paymentType: "Credit - 30 Days",
+        advanceAmount: 10000,
+        photoOfBill: "",
+        transportationInclude: "Yes",
+        transporterName: "Lucknow Cargo Express",
+        amount: 7500,
+        challanNo: "CH-98122",
+        challanImage: "",
+        statusOfBill: "",
+        billImage: "",
+        timestamp: "2026-05-15T09:00:00.000Z"
+      },
+      {
+        id: "LIFT-3012",
+        indentNumber: "IND-8821",
+        poNumber: "PO-2026-0812",
+        vendorName: "TATA Steel Ltd",
+        projectName: "Gomti Nagar Extension",
+        productName: "TMT Fe 550 Rebars 12mm",
+        billStatus: "Pending",
+        plannedDate: "2026-05-19",
+        billNo: "",
+        qty: 15,
+        leadTime: "5 Days",
+        typeOfBill: "GST Tax Invoice",
+        billAmount: 780000,
+        discountAmount: 15000,
+        paymentType: "Advance Payment",
+        advanceAmount: 200000,
+        photoOfBill: "",
+        transportationInclude: "No",
+        transporterName: "TATA Logistics Ltd",
+        amount: 0,
+        challanNo: "CH-88192",
+        challanImage: "",
+        statusOfBill: "",
+        billImage: "",
+        timestamp: "2026-05-16T10:00:00.000Z"
+      },
+      {
+        id: "LIFT-3104",
+        indentNumber: "IND-7711",
+        poNumber: "PO-2026-0701",
+        vendorName: "Berger Paints India",
+        projectName: "Vrindavan Yojna Site",
+        productName: "Easy Clean Emulsion White",
+        billStatus: "Pending",
+        plannedDate: "2026-05-20",
+        billNo: "",
+        qty: 80,
+        leadTime: "2 Days",
+        typeOfBill: "GST Tax Invoice",
+        billAmount: 48000,
+        discountAmount: 1200,
+        paymentType: "Part Payment",
+        advanceAmount: 0,
+        photoOfBill: "",
+        transportationInclude: "Yes",
+        transporterName: "Delhivery Surface",
+        amount: 1800,
+        challanNo: "CH-77821",
+        challanImage: "",
+        statusOfBill: "",
+        billImage: "",
+        timestamp: "2026-05-17T11:00:00.000Z"
+      },
+      {
+        id: "LIFT-4091",
+        indentNumber: "IND-6602",
+        poNumber: "PO-2026-0610",
+        vendorName: "Polycab Wires Ltd",
+        projectName: "Chinar Heights B",
+        productName: "3-Core Copper Flexible Cable",
+        billStatus: "Received",
+        plannedDate: "2026-05-21",
+        billNo: "BILL-2283",
+        qty: 450,
+        leadTime: "4 Days",
+        typeOfBill: "GST Tax Invoice",
+        billAmount: 185000,
+        discountAmount: 5000,
+        paymentType: "Immediate RTGS",
+        advanceAmount: 50000,
+        photoOfBill: "",
+        transportationInclude: "Yes",
+        transporterName: "Speed Safe Carriers",
+        amount: 12000,
+        challanNo: "CH-66029",
+        challanImage: "",
+        statusOfBill: "Ok",
+        billImage: "https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?w=500",
+        timestamp: "2026-05-17T12:00:00.000Z"
+      },
+      {
+        id: "LIFT-5120",
+        indentNumber: "IND-5509",
+        poNumber: "PO-2026-0504",
+        vendorName: "Kirloskar Pumps",
+        projectName: "Alambagh Metro Hub",
+        productName: "10HP Submersible Pump",
+        billStatus: "Pending",
+        plannedDate: "2026-05-22",
+        billNo: "",
+        qty: 4,
+        leadTime: "6 Days",
+        typeOfBill: "GST Tax Invoice",
+        billAmount: 142000,
+        discountAmount: 3000,
+        paymentType: "Credit - 30 Days",
+        advanceAmount: 30000,
+        photoOfBill: "",
+        transportationInclude: "No",
+        transporterName: "Self Picked",
+        amount: 0,
+        challanNo: "CH-55912",
+        challanImage: "",
+        statusOfBill: "",
+        billImage: "",
+        timestamp: "2026-05-17T13:00:00.000Z"
+      },
+      {
+        id: "LIFT-6612",
+        indentNumber: "IND-4481",
+        poNumber: "PO-2026-0422",
+        vendorName: "Havells India",
+        projectName: "Sector-18 Corporate Tower",
+        productName: "1200mm Premium Ceiling Fan",
+        billStatus: "Received",
+        plannedDate: "2026-05-23",
+        billNo: "BILL-5502",
+        qty: 35,
+        leadTime: "1 Day",
+        typeOfBill: "GST Tax Invoice",
+        billAmount: 98000,
+        discountAmount: 2000,
+        paymentType: "Credit - 30 Days",
+        advanceAmount: 0,
+        photoOfBill: "",
+        transportationInclude: "No",
+        transporterName: "Professional Couriers",
+        amount: 0,
+        challanNo: "CH-44810",
+        challanImage: "",
+        statusOfBill: "Not Ok",
+        billImage: "https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?w=500",
+        timestamp: "2026-05-17T14:00:00.000Z"
+      }
+    ];
+    saveToStorage(STORAGE_KEYS.BILL_NOT_RECEIVED, dummy);
+    return dummy;
+  }
+  return data;
+};
+
+export const saveBillNotReceived = (records) => saveToStorage(STORAGE_KEYS.BILL_NOT_RECEIVED, records);
+
+export const updateBillNotReceived = (id, updates) => {
+  const records = getBillNotReceived();
+  const idx = records.findIndex(r => r.id === id || String(r.id) === String(id));
+  if (idx !== -1) {
+    records[idx] = { ...records[idx], ...updates };
+    saveBillNotReceived(records);
+    return records[idx];
+  }
+  return null;
+};
+
+// --- Store Issues Operations ---
+export const getStoreIssues = () => {
+  const data = getFromStorage(STORAGE_KEYS.STORE_ISSUES);
+  if (!data) {
+    const dummy = [
+      { id: "ISS-2026-901", date: "2026-05-10", issuedTo: "Ramesh Kumar (Supervisor)", department: "Civil Works", projectName: "Pratap Site A", itemName: "OPC 53 Cement", qty: 50, uom: "Bags", authorizedBy: "S. P. Singh (Project Manager)", remarks: "Issued for slab casting foundation" },
+      { id: "ISS-2026-902", date: "2026-05-11", issuedTo: "Amit Singh (Foreman)", department: "Structure & Steel", projectName: "Gomti Nagar Extension", itemName: "TMT Fe 550 Rebars 12mm", qty: 4, uom: "MT", authorizedBy: "R. K. Verma (Technical Lead)", remarks: "Issued for column reinforcement" },
+      { id: "ISS-2026-903", date: "2026-05-12", issuedTo: "Vinay Shukla (Site Engineer)", department: "Finishing & Paint", projectName: "Vrindavan Yojna Site", itemName: "Easy Clean Emulsion White", qty: 10, uom: "Liters", authorizedBy: "A. K. Mishra (HOD Works)", remarks: "Issued for lobby paint touchups" },
+      { id: "ISS-2026-904", date: "2026-05-13", issuedTo: "Suresh Yadav (Electrical Head)", department: "Electrical", projectName: "Chinar Heights B", itemName: "3-Core Copper Flexible Cable", qty: 120, uom: "Meters", authorizedBy: "S. P. Singh (Project Manager)", remarks: "Issued for block-A wiring" },
+      { id: "ISS-2026-905", date: "2026-05-14", issuedTo: "Kapil Dev (Plumbing Lead)", department: "Plumbing", projectName: "Alambagh Metro Hub", itemName: "10HP Submersible Pump", qty: 1, uom: "Nos", authorizedBy: "R. K. Verma (Technical Lead)", remarks: "Issued for main sump installation" },
+      { id: "ISS-2026-906", date: "2026-05-15", issuedTo: "Mohit Sharma (Senior Mason)", department: "Masonry", projectName: "Charbagh Depot", itemName: "1200mm Premium Ceiling Fan", qty: 12, uom: "Nos", authorizedBy: "A. K. Mishra (HOD Works)", remarks: "Issued for labor quarters" }
+    ];
+    saveToStorage(STORAGE_KEYS.STORE_ISSUES, dummy);
+    return dummy;
+  }
+  return data;
+};
+
+export const saveStoreIssues = (records) => saveToStorage(STORAGE_KEYS.STORE_ISSUES, records);
+
+export const addStoreIssue = (record) => {
+  const records = getStoreIssues();
+  const newRecord = {
+    ...record,
+    id: `ISS-2026-${100 + records.length + 1}`
+  };
+  records.push(newRecord);
+  saveStoreIssues(records);
+  return newRecord;
+};
+
+// --- Store Returns Operations ---
+export const getStoreReturns = () => {
+  const data = getFromStorage(STORAGE_KEYS.STORE_RETURNS);
+  if (!data) {
+    const dummy = [
+      { id: "RET-2026-401", date: "2026-05-13", originalSlipNo: "ISS-2026-901", returnedBy: "Ramesh Kumar (Supervisor)", itemName: "OPC 53 Cement", qty: 5, uom: "Bags", reason: "Unused excess material", condition: "Good - Resellable / Reissuable" },
+      { id: "RET-2026-402", date: "2026-05-16", originalSlipNo: "ISS-2026-903", returnedBy: "Vinay Shukla (Site Engineer)", itemName: "Easy Clean Emulsion White", qty: 2, uom: "Liters", reason: "Leftover container seals intact", condition: "Perfect - Unopened" }
+    ];
+    saveToStorage(STORAGE_KEYS.STORE_RETURNS, dummy);
+    return dummy;
+  }
+  return data;
+};
+
+export const saveStoreReturns = (records) => saveToStorage(STORAGE_KEYS.STORE_RETURNS, records);
+
+export const addStoreReturn = (record) => {
+  const records = getStoreReturns();
+  const newRecord = {
+    ...record,
+    id: `RET-2026-${100 + records.length + 1}`
+  };
+  records.push(newRecord);
+  saveStoreReturns(records);
+  return newRecord;
+};
+
+// --- Perpetual Inventory Operations ---
+export const getInventory = () => {
+  const data = getFromStorage(STORAGE_KEYS.INVENTORY);
+  if (!data) {
+    const dummy = [
+      { item: "OPC 53 Cement", firmName: "Pratap Engineering Site A", department: "Civil Works", groupHead: "Materials", uom: "Bags", status: "Active", indented: 500, approved: 500, purchaseReturn: 0, liftingQty: 450, inTransit: 50, issueReturn: 5, issued: 250, stTo: 20, stFrom: 10, quantity: 195, totalPrice: 74100 },
+      { item: "TMT Fe 550 Rebars 12mm", firmName: "Gomti Nagar Extension", department: "Structure & Steel", groupHead: "Metals", uom: "MT", status: "Active", indented: 30, approved: 30, purchaseReturn: 0, liftingQty: 25, inTransit: 5, issueReturn: 0, issued: 18, stTo: 0, stFrom: 2, quantity: 9, totalPrice: 468000 },
+      { item: "Easy Clean Emulsion White", firmName: "Vrindavan Yojna Site", department: "Finishing & Paint", groupHead: "Chemicals", uom: "Liters", status: "Active", indented: 200, approved: 200, purchaseReturn: 2, liftingQty: 180, inTransit: 0, issueReturn: 2, issued: 95, stTo: 10, stFrom: 0, quantity: 75, totalPrice: 26250 },
+      { item: "3-Core Copper Flexible Cable", firmName: "Chinar Heights B", department: "Electrical", groupHead: "Cables", uom: "Meters", status: "Active", indented: 1000, approved: 1000, purchaseReturn: 0, liftingQty: 800, inTransit: 200, issueReturn: 10, issued: 450, stTo: 50, stFrom: 20, quantity: 330, totalPrice: 39600 },
+      { item: "10HP Submersible Pump", firmName: "Alambagh Metro Hub", department: "Plumbing", groupHead: "Machinery", uom: "Nos", status: "Critical", indented: 5, approved: 5, purchaseReturn: 0, liftingQty: 4, inTransit: 1, issueReturn: 0, issued: 3, stTo: 0, stFrom: 0, quantity: 1, totalPrice: 85000 },
+      { item: "1200mm Premium Ceiling Fan", firmName: "Sector-18 Corporate Tower", department: "Electrical", groupHead: "Appliances", uom: "Nos", status: "Active", indented: 120, approved: 120, purchaseReturn: 0, liftingQty: 100, inTransit: 20, issueReturn: 0, issued: 60, stTo: 10, stFrom: 5, quantity: 35, totalPrice: 98000 },
+      { item: "3 Phase AC Contractor", firmName: "Hazratganj Plaza", department: "Electrical", groupHead: "Spares", uom: "Nos", status: "Active", indented: 25, approved: 25, purchaseReturn: 0, liftingQty: 20, inTransit: 5, issueReturn: 0, issued: 12, stTo: 2, stFrom: 0, quantity: 6, totalPrice: 27000 },
+      { item: "Rapid Hardening Cement", firmName: "Charbagh Depot", department: "Civil Works", groupHead: "Materials", uom: "Bags", status: "Active", indented: 300, approved: 300, purchaseReturn: 0, liftingQty: 280, inTransit: 20, issueReturn: 0, issued: 210, stTo: 15, stFrom: 5, quantity: 60, totalPrice: 25200 }
+    ];
+    saveToStorage(STORAGE_KEYS.INVENTORY, dummy);
+    return dummy;
+  }
+  return data;
+};
+
+export const saveInventory = (records) => saveToStorage(STORAGE_KEYS.INVENTORY, records);
+
+// --- Quotation/Enquiry History Operations ---
+export const getQuotationHistory = () => {
+  const data = getFromStorage(STORAGE_KEYS.QUOTATION_HISTORY);
+  if (!data) {
+    const dummy = [
+      {
+        timestamp: "2026-05-12T10:30:00.000Z",
+        quatationNo: "QT-001",
+        supplierName: "Reliance Industries",
+        adreess: "Reliance Corporate Park, Navi Mumbai",
+        gst: "22AAAAR1234A1Z1",
+        indentNo: "IND-2026-001",
+        product: "OPC 53 Cement",
+        description: "High early strength 53 grade OPC",
+        qty: "500",
+        unit: "Bags",
+        pdfLink: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        firm: "Pratap Engineering Site A",
+        firm_id: "FIRM-A",
+        token: "session-uuid-1111",
+        responded_at: "2026-05-13T12:00:00.000Z",
+        vendor_rate: 420
+      },
+      {
+        timestamp: "2026-05-12T10:30:00.000Z",
+        quatationNo: "QT-001",
+        supplierName: "Infosys Tech",
+        adreess: "Infosys Tech HQ, Bangalore",
+        gst: "29BBBBB5678B2Z2",
+        indentNo: "IND-2026-001",
+        product: "OPC 53 Cement",
+        description: "High early strength 53 grade OPC",
+        qty: "500",
+        unit: "Bags",
+        pdfLink: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        firm: "Pratap Engineering Site A",
+        firm_id: "FIRM-A",
+        token: "session-uuid-2222",
+        responded_at: null,
+        vendor_rate: null
+      },
+      {
+        timestamp: "2026-05-15T14:45:00.000Z",
+        quatationNo: "QT-002",
+        supplierName: "Wipro Limited",
+        adreess: "Wipro Campus, Doddakannelli, Bangalore",
+        gst: "29CCCCC9012C3Z3",
+        indentNo: "IND-2026-003",
+        product: "TMT Fe 550 Rebars 12mm",
+        description: "High tensile steel reinforcement",
+        qty: "30",
+        unit: "MT",
+        pdfLink: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        firm: "Gomti Nagar Extension",
+        firm_id: "FIRM-B",
+        token: "session-uuid-3333",
+        responded_at: "2026-05-16T16:00:00.000Z",
+        vendor_rate: 52000
+      }
+    ];
+    saveToStorage(STORAGE_KEYS.QUOTATION_HISTORY, dummy);
+    return dummy;
+  }
+  return data;
+};
+
+export const saveQuotationHistory = (records) => saveToStorage(STORAGE_KEYS.QUOTATION_HISTORY, records);
+
+export const insertQuotationHistory = (rows) => {
+  const history = getQuotationHistory();
+  history.push(...rows);
+  saveQuotationHistory(history);
+  return history;
+};
+
+// --- Project Operations ---
+export const getProjects = () => {
+  return getFromStorage(STORAGE_KEYS.PROJECTS) || [];
+};
+
+export const saveProjects = (projects) => saveToStorage(STORAGE_KEYS.PROJECTS, projects);
+
+export const saveProject = (project) => {
+  const projects = getProjects();
+  projects.push(project);
+  saveProjects(projects);
+  return project;
+};
+
+// --- Project Design Operations ---
+export const getDesigns = () => {
+  return getFromStorage(STORAGE_KEYS.DESIGNS) || [];
+};
+
+export const saveDesigns = (designs) => saveToStorage(STORAGE_KEYS.DESIGNS, designs);
+
+export const getDesignByProject = (projectNo) => {
+  const designs = getDesigns();
+  const found = designs.find(d => d.projectNo === projectNo);
+  return found ? found.rows : [];
+};
+
+export const saveDesignForProject = (projectNo, rows) => {
+  const designs = getDesigns();
+  const idx = designs.findIndex(d => d.projectNo === projectNo);
+  const record = { projectNo, rows, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    designs[idx] = record;
+  } else {
+    designs.push(record);
+  }
+  saveDesigns(designs);
+  return record;
+};
+
+export const isUploadDesignComplete = (projectNo) => {
+  if (getDesignByProject(projectNo).length > 0) return true;
+  const pMinors = (getMinors() || []).filter(m => m.projectNo === projectNo);
+  return pMinors.length > 0;
+};
+
+export const updateProject = (updated) => {
+  const projects = getProjects();
+  const index = projects.findIndex(p => p.id === updated.id);
+  if (index !== -1) {
+    projects[index] = updated;
+    saveProjects(projects);
+  }
+};
+
+// Deletes a project and every record keyed by its project number across every pipeline page
+// (Mobilization, Finalize Consultant, Sent PO, Survey, Drawing Upload, Final Approval, Upload
+// Drawing, Material Requirements, Designs, Executions, Actuals, Process Flow stages), plus any
+// Minors under it and their own records. Without this, deleting a project used to leave large
+// uploaded attachments (PO documents, drawing files) orphaned in localStorage forever.
+export const deleteProject = (id) => {
+  const projects = getProjects();
+  const target = projects.find(p => p.id === id);
+  const projectNo = target ? target.serialNo : id;
+
+  saveProjects(projects.filter(p => p.id !== id));
+  saveMobilizations(getMobilizations().filter(r => r.projectNo !== projectNo));
+  saveFinalizeConsultants(getFinalizeConsultants().filter(r => r.projectNo !== projectNo));
+  saveSentPOs(getSentPOs().filter(r => r.projectNo !== projectNo));
+  saveSurveys(getSurveys().filter(r => r.projectNo !== projectNo));
+  saveDrawingUploads(getDrawingUploads().filter(r => r.projectNo !== projectNo));
+  saveFinalApprovals(getFinalApprovals().filter(r => r.projectNo !== projectNo));
+  saveDrawings(getDrawings().filter(r => r.projectNo !== projectNo));
+  saveReqMaterials(getReqMaterials().filter(r => r.projectNo !== projectNo));
+  saveDesigns(getDesigns().filter(r => r.projectNo !== projectNo));
+  saveExecutions(getExecutions().filter(r => r.projectNo !== projectNo));
+  saveActuals(getActuals().filter(r => r.projectNo !== projectNo));
+  saveStageEntries(getStageEntries().filter(r => r.projectNo !== projectNo));
+  saveDocumentations(getDocumentations().filter(d => d.projectNo !== projectNo));
+
+  getMinors().filter(m => m.projectNo === projectNo).forEach(m => deleteMinor(m.id));
+};
+
+// --- Mobilization Operations ---
+// One record per project (id = projectNo). A project is "complete" once at least one
+// consultant has been added - the Mobilization page uses that to split projects between
+// its Pending and History tabs.
+export const getMobilizations = () => {
+  return getFromStorage(STORAGE_KEYS.MOBILIZATION) || [];
+};
+
+export const saveMobilizations = (data) => saveToStorage(STORAGE_KEYS.MOBILIZATION, data);
+
+export const getMobilizationForProject = (projectNo) => {
+  return getMobilizations().find(m => m.projectNo === projectNo) || null;
+};
+
+export const isMobilizationComplete = (record) => !!(record && Array.isArray(record.consultants) && record.consultants.length > 0);
+
+export const upsertMobilization = (record) => {
+  const data = getMobilizations();
+  const idx = data.findIndex(m => m.projectNo === record.projectNo);
+  const saved = { ...record, id: record.projectNo, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    data[idx] = saved;
+  } else {
+    data.push(saved);
+  }
+  saveMobilizations(data);
+  return saved;
+};
+
+// --- Finalize Consultant Operations ---
+// One record per project (id = projectNo). Only projects with a completed Mobilization
+// are eligible. A project is "complete" once one or more sub contractors have been
+// finalized from the ones added during Mobilization (record.consultants array).
+export const getFinalizeConsultants = () => {
+  return getFromStorage(STORAGE_KEYS.FINALIZE_CONSULTANT) || [];
+};
+
+export const saveFinalizeConsultants = (data) => saveToStorage(STORAGE_KEYS.FINALIZE_CONSULTANT, data);
+
+export const getFinalizeConsultantForProject = (projectNo) => {
+  return getFinalizeConsultants().find(f => f.projectNo === projectNo) || null;
+};
+
+export const isFinalizeConsultantComplete = (record) => !!(record && Array.isArray(record.consultants) && record.consultants.length > 0);
+
+export const upsertFinalizeConsultant = (record) => {
+  const data = getFinalizeConsultants();
+  const idx = data.findIndex(f => f.projectNo === record.projectNo);
+  const saved = { ...record, id: record.projectNo, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    data[idx] = saved;
+  } else {
+    data.push(saved);
+  }
+  saveFinalizeConsultants(data);
+  return saved;
+};
+
+// --- Sent PO Operations ---
+// One record per project (id = projectNo). Only projects with a Finalized Consultant are
+// eligible. A project is "complete" once at least one sub contractor has a PO recorded
+// against it (record.consultants array), mirroring Mobilization/Finalize Consultant.
+export const getSentPOs = () => {
+  return getFromStorage(STORAGE_KEYS.SENT_PO) || [];
+};
+
+export const saveSentPOs = (data) => saveToStorage(STORAGE_KEYS.SENT_PO, data);
+
+export const getSentPOForProject = (projectNo) => {
+  return getSentPOs().find(p => p.projectNo === projectNo) || null;
+};
+
+export const isSentPOComplete = (record) => !!(record && Array.isArray(record.consultants) && record.consultants.length > 0);
+
+export const upsertSentPO = (record) => {
+  const data = getSentPOs();
+  const idx = data.findIndex(p => p.projectNo === record.projectNo);
+  const saved = { ...record, id: record.projectNo, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    data[idx] = saved;
+  } else {
+    data.push(saved);
+  }
+  saveSentPOs(data);
+  return saved;
+};
+
+// --- Survey Operations ---
+// One record per project (id = projectNo). Only projects with a PO sent are eligible. A
+// project is "complete" once the survey Start Date, End Date and a Drawing Ready (yes/no)
+// answer have all been saved.
+export const getSurveys = () => {
+  return getFromStorage(STORAGE_KEYS.SURVEY) || [];
+};
+
+export const saveSurveys = (data) => saveToStorage(STORAGE_KEYS.SURVEY, data);
+
+export const getSurveyForProject = (projectNo) => {
+  return getSurveys().find(s => s.projectNo === projectNo) || null;
+};
+
+export const isSurveyComplete = (record) => !!(record && (record.surveyStatus === 'Yes' || record.surveyStatus === 'yes' || (record.surveyStartDate && record.surveyEndDate)));
+
+export const upsertSurvey = (record) => {
+  const data = getSurveys();
+  const idx = data.findIndex(s => s.projectNo === record.projectNo);
+  const saved = { ...record, id: record.projectNo, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    data[idx] = saved;
+  } else {
+    data.push(saved);
+  }
+  saveSurveys(data);
+  return saved;
+};
+
+// --- Drawing Upload Operations ---
+// One record per project (id = projectNo). Only projects with a completed Survey are
+// eligible. A project is "complete" once a Drawing Date and the uploaded drawing file have
+// both been saved. (Separate from the standalone "Upload Drawing" sidebar page/storage.)
+export const getDrawingUploads = () => {
+  return getFromStorage(STORAGE_KEYS.DRAWING_UPLOAD) || [];
+};
+
+export const saveDrawingUploads = (data) => saveToStorage(STORAGE_KEYS.DRAWING_UPLOAD, data);
+
+export const getDrawingUploadForProject = (projectNo) => {
+  return getDrawingUploads().find(d => d.projectNo === projectNo) || null;
+};
+
+export const isDrawingUploadComplete = (record) => !!(record && (record.drawingDate || record.drawingFile || record.updatedAt || record.id));
+
+export const upsertDrawingUpload = (record) => {
+  const data = getDrawingUploads();
+  const idx = data.findIndex(d => d.projectNo === record.projectNo);
+  const saved = { ...record, id: record.projectNo, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    data[idx] = saved;
+  } else {
+    data.push(saved);
+  }
+  saveDrawingUploads(data);
+  return saved;
+};
+
+// --- Final Approval Operations ---
+// One record per project (id = projectNo). Only projects with a completed Drawing Upload
+// (this new stage) are eligible. A project is "complete" once all four approval checkboxes
+// (Sub Division, Division, Circle Office, CEO Office) are checked.
+export const getFinalApprovals = () => {
+  return getFromStorage(STORAGE_KEYS.FINAL_APPROVAL) || [];
+};
+
+export const saveFinalApprovals = (data) => saveToStorage(STORAGE_KEYS.FINAL_APPROVAL, data);
+
+export const getFinalApprovalForProject = (projectNo) => {
+  return getFinalApprovals().find(f => f.projectNo === projectNo) || null;
+};
+
+export const isFinalApprovalComplete = (record) => !!(record && (record.subDivision || record.division || record.circleOffice || record.ceoOffice));
+
+export const upsertFinalApproval = (record) => {
+  const data = getFinalApprovals();
+  const idx = data.findIndex(f => f.projectNo === record.projectNo);
+  const saved = { ...record, id: record.projectNo, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    data[idx] = saved;
+  } else {
+    data.push(saved);
+  }
+  saveFinalApprovals(data);
+  return saved;
+};
+
+// --- Upload Drawing Operations ---
+// One record per project (id = projectNo), holding a growing list of Minor entries - each
+// Minor is a name plus its uploaded drawing file (stored as a base64 data URI, matching the
+// fileToBase64 convention used elsewhere in this app). New minors are appended, never replaced,
+// so a project can accumulate drawings across multiple submissions.
+export const getDrawings = () => {
+  return getFromStorage(STORAGE_KEYS.DRAWINGS) || [];
+};
+
+export const saveDrawings = (data) => saveToStorage(STORAGE_KEYS.DRAWINGS, data);
+
+export const getDrawingsForProject = (projectNo) => {
+  const rec = getDrawings().find(d => d.projectNo === projectNo);
+  return rec ? rec.minors : [];
+};
+
+export const addDrawingMinors = (projectNo, newMinors) => {
+  const data = getDrawings();
+  const idx = data.findIndex(d => d.projectNo === projectNo);
+  const updatedAt = new Date().toISOString();
+  if (idx >= 0) {
+    data[idx] = { ...data[idx], minors: [...data[idx].minors, ...newMinors], updatedAt };
+  } else {
+    data.push({ id: projectNo, projectNo, minors: newMinors, updatedAt });
+  }
+  saveDrawings(data);
+  return data.find(d => d.projectNo === projectNo);
+};
+
+export const deleteDrawingMinor = (projectNo, minorId) => {
+  const data = getDrawings();
+  const idx = data.findIndex(d => d.projectNo === projectNo);
+  if (idx < 0) return;
+  data[idx] = { ...data[idx], minors: data[idx].minors.filter(m => m.id !== minorId), updatedAt: new Date().toISOString() };
+  saveDrawings(data);
+};
+
+// --- Material Requirement Operations ---
+export const getReqMaterials = () => {
+  return getFromStorage(STORAGE_KEYS.MATERIAL_REQUIREMENTS) || [];
+};
+
+export const saveReqMaterials = (data) => saveToStorage(STORAGE_KEYS.MATERIAL_REQUIREMENTS, data);
+
+export const saveReqMaterial = (indent) => {
+  const data = getReqMaterials();
+  data.push(indent);
+  saveReqMaterials(data);
+  return indent;
+};
+
+// --- Design Execution Entry Operations ---
+export const getExecutions = () => {
+  return getFromStorage(STORAGE_KEYS.EXECUTIONS) || [];
+};
+
+export const saveExecutions = (data) => saveToStorage(STORAGE_KEYS.EXECUTIONS, data);
+
+export const saveExecution = (entry) => {
+  const data = getExecutions();
+  const now = new Date();
+  const timestamp = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+  const completeEntry = {
+    ...entry,
+    timestamp: entry.timestamp || timestamp,
+    submissionDateTime: entry.submissionDateTime || entry.timestamp || timestamp,
+    createdAt: entry.createdAt || now.toISOString()
+  };
+  data.push(completeEntry);
+  saveExecutions(data);
+  return completeEntry;
+};
+
+// Lets Execution Details correct an already-saved entry's execution values in place
+// (design snapshot is never touched) - used by the Edit column on ExecutionDetails.jsx.
+export const updateExecution = (id, updates) => {
+  const data = getExecutions();
+  const idx = data.findIndex(e => e.id === id);
+  if (idx === -1) return null;
+  data[idx] = { ...data[idx], ...updates };
+  saveExecutions(data);
+  return data[idx];
+};
+
+// --- Design Actual Measurement Operations ---
+export const getActuals = () => {
+  return getFromStorage(STORAGE_KEYS.ACTUALS) || [];
+};
+
+export const saveActuals = (data) => saveToStorage(STORAGE_KEYS.ACTUALS, data);
+
+export const saveActual = (entry) => {
+  const data = getActuals();
+  const now = new Date();
+  const timestamp = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+  const completeEntry = {
+    ...entry,
+    timestamp: entry.timestamp || timestamp,
+    submissionDateTime: entry.submissionDateTime || entry.timestamp || timestamp,
+    createdAt: entry.createdAt || now.toISOString()
+  };
+  data.push(completeEntry);
+  saveActuals(data);
+  return completeEntry;
+};
+
+// Lets Actual Details correct an already-saved entry's actual values in place (design snapshot
+// is never touched) - used by the Edit column on ActualDetails.jsx.
+export const updateActual = (id, updates) => {
+  const data = getActuals();
+  const idx = data.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+  data[idx] = { ...data[idx], ...updates };
+  saveActuals(data);
+  return data[idx];
+};
+
+// --- RM Billing Operations ---
+// A single RM bill batches together one or more Execution/Actual entries sent for payment
+// together (see ExecutionDetails.jsx/ActualDetails.jsx "Send for Payment"). It starts as
+// status: 'pending' (shown in RM1's Pending tab) and becomes 'billed' once the bill is
+// generated (Bill No/Amount/Remarks/Date filled in) - it then shows up in RM1's History tab
+// and in RM2.jsx.
+export const getRMBills = () => {
+  const data = getFromStorage(STORAGE_KEYS.RM_BILLS) || [];
+  let modified = false;
+  const migrated = data.map(b => {
+    if (b.rmNo && /^RM-/i.test(b.rmNo)) {
+      modified = true;
+      return { ...b, rmNo: b.rmNo.replace(/^RM-/i, 'RA-') };
+    }
+    return b;
+  });
+  if (modified) {
+    saveToStorage(STORAGE_KEYS.RM_BILLS, migrated);
+  }
+  return migrated;
+};
+
+export const saveRMBills = (data) => saveToStorage(STORAGE_KEYS.RM_BILLS, data);
+
+export const addRMBill = (bill) => {
+  const data = getRMBills();
+  data.push(bill);
+  saveRMBills(data);
+  return bill;
+};
+
+export const updateRMBill = (id, updates) => {
+  const data = getRMBills();
+  const idx = data.findIndex(b => b.id === id);
+  if (idx === -1) return null;
+  data[idx] = { ...data[idx], ...updates };
+  saveRMBills(data);
+  return data[idx];
+};
+
+export const isDepartmentBillingComplete = (projectNo) => {
+  const bills = getRMBills();
+  return bills.some(b => b.projectNo === projectNo && b.billType === 'Execution' && b.status === 'billed');
+};
+
+export const isSubContractorBillingComplete = (projectNo) => {
+  const bills = getRMBills();
+  return bills.some(b => b.projectNo === projectNo && b.billType === 'Actual' && b.status === 'billed');
+};
+
+// --- Process Flow Stage-Step Tracking Operations ---
+// One entry per (project, stage, step) - tracks the SOP checklist progress shown on the
+// Process Flow / Stage Detail pages. Identified by a deterministic id so re-saving the same
+// step updates it in place instead of piling up duplicate rows.
+export const getStageEntries = () => {
+  return getFromStorage(STORAGE_KEYS.STAGE_ENTRIES) || [];
+};
+
+export const saveStageEntries = (data) => saveToStorage(STORAGE_KEYS.STAGE_ENTRIES, data);
+
+export const stageEntryId = (projectNo, stageNumber, stepIndex) =>
+  `${projectNo}__stage${stageNumber}__step${stepIndex}`;
+
+export const getStageEntriesForStage = (projectNo, stageNumber) => {
+  return getStageEntries().filter(e => e.projectNo === projectNo && e.stageNumber === stageNumber);
+};
+
+export const upsertStageEntry = (entry) => {
+  const data = getStageEntries();
+  const idx = data.findIndex(e => e.id === entry.id);
+  const record = { ...entry, updatedAt: new Date().toISOString() };
+  if (idx >= 0) {
+    data[idx] = record;
+  } else {
+    data.push(record);
+  }
+  saveStageEntries(data);
+  return record;
+};
+
+// Minors operations
+export const getMinors = () => {
+  return getFromStorage(STORAGE_KEYS.MINORS) || [];
+};
+
+export const saveMinors = (minors) => {
+  saveToStorage(STORAGE_KEYS.MINORS, minors);
+};
+
+export const saveMinor = (minor) => {
+  const data = getMinors();
+  const index = data.findIndex(m => m.id === minor.id);
+  if (index >= 0) {
+    data[index] = minor;
+  } else {
+    data.push(minor);
+  }
+  saveMinors(data);
+};
+
+// Deletes a Minor and every record keyed by its id (which acts as its own "project number"
+// everywhere downstream - see getProjectOrMinor) so nothing orphaned is left behind: its
+// design rows, execution/actual entries and process-flow stage progress.
+export const deleteMinor = (minorId) => {
+  saveMinors(getMinors().filter(m => m.id !== minorId));
+  saveDesigns(getDesigns().filter(d => d.projectNo !== minorId));
+  saveExecutions(getExecutions().filter(e => e.projectNo !== minorId));
+  saveActuals(getActuals().filter(a => a.projectNo !== minorId));
+  saveStageEntries(getStageEntries().filter(s => s.projectNo !== minorId));
+  saveSchedules(getSchedules().filter(s => s.minorId !== minorId));
+};
+
+// Schedule operations for Minors
+export const getSchedules = () => {
+  return getFromStorage(STORAGE_KEYS.SCHEDULES) || [];
+};
+
+export const saveSchedules = (schedules) => {
+  saveToStorage(STORAGE_KEYS.SCHEDULES, schedules);
+};
+
+export const saveScheduleForMinor = (minorId, scheduleData) => {
+  const all = getSchedules();
+  const existingIdx = all.findIndex(s => s.minorId === minorId);
+  const record = {
+    minorId,
+    ...scheduleData,
+    updatedAt: new Date().toISOString()
+  };
+  if (existingIdx >= 0) {
+    all[existingIdx] = record;
+  } else {
+    all.push(record);
+  }
+  saveSchedules(all);
+  return record;
+};
+
+export const getScheduleForMinor = (minorId) => {
+  const all = getSchedules();
+  const found = all.find(s => s.minorId === minorId);
+  if (found) return found;
+  const minors = getMinors();
+  const minor = minors.find(m => m.id === minorId);
+  if (minor?.scheduleRows || minor?.scheduleFile) {
+    return {
+      minorId,
+      fileName: minor.scheduleFileName || '',
+      fileUrl: minor.scheduleFile || '',
+      rows: minor.scheduleRows || [],
+      headers: minor.scheduleHeaders || []
+    };
+  }
+  return null;
+};
+
+export const getProjectOrMinor = (id) => {
+  const projects = getProjects();
+  let found = projects.find(p => p.serialNo === id);
+  if (found) return { ...found, isMinor: false };
+  
+  const minors = getMinors();
+  const minor = minors.find(m => m.id === id);
+  if (minor) {
+    const parent = projects.find(p => p.serialNo === minor.projectNo);
+    if (parent) {
+      return { 
+        ...parent, 
+        serialNo: minor.id, 
+        projectName: `${parent.projectName} (${minor.minorName})`,
+        originalProjectName: parent.projectName,
+        minorName: minor.minorName,
+        contractorName: minor.contractorName || parent.contractorName,
+        isMinor: true,
+        parentProjectNo: parent.serialNo,
+        poNumber: minor.poNumber || parent.poNumber || ''
+      };
+    }
+  }
+  return null;
+};
+
+// --- External PO Master (Create PO page from external system) ---
+const DEFAULT_SAMPLE_PDF = 'data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsOfCjEgMCBvYmoKPDwKL1R5cGUgL0NhdGFsb2cKL1BhZ2VzIDIgMCBSCj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9UeXBlIC9QYWdlcwovS2lkcyBbMyAwIFJdCi9Db3VudCAxCj4+CmVuZG9iagozIDAgb2JqCjw8Ci9UeXBlIC9QYWdlCi9QYXJlbnQgMiAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KPj4KZW5kb2JqCnhyZWYKMCA0CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxOCAwMDAwMCBuIAowMDAwMDAwMDY5IDAwMDAwIG4gCjAwMDAwMDAxMjUgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSA0Ci9Sb290IDEgMCBSCj4+CnN0YXJ0eHJlZgoxOTkKJSVFT0YK';
+
+export const normalizePoMasterRecord = (r: any) => {
+  const poNum = (r.po_number || r.poNumber || '').trim();
+  if (!poNum) return null;
+  const rawDate = r.po_created_date || r.poDate || r.timestamp || '';
+  const dateVal = toInputDateFormat(rawDate) || toInputDateFormat(new Date());
+  
+  const rawAmt = Number(r.total_po_amount || r.totalPoAmount || r.amount || r.total_amount || 0);
+
+  const subContractorName = r.subContractorName || r.sub_contractor_name || '';
+  const subContractorPhone = r.subContractorPhone || r.sub_contractor_phone || '';
+  const subContractorEmail = r.subContractorEmail || r.sub_contractor_email || '';
+  const contractorName = r.contractorName || r.contractor_name || '';
+  const contractorPhone = r.contractorPhone || r.contractor_phone || '';
+  const contractorEmail = r.contractorEmail || r.contractor_email || '';
+
+  const rawPhone = (subContractorPhone || contractorPhone || r.site_engineer_phoneNo || r.siteEngineerPhoneNo || r.supplierPhone || r.whatsapp_number || r.number || '').toString().replace(/\D/g, '').slice(0, 10);
+  const rawName = subContractorName || contractorName || r.name || r.party_name || r.partyName || r.vendor_name || r.supplierName || 'Sub Contractor';
+  const rawUnit = r.unit || r.workingUnit || r.items?.[0]?.uom || 'Hectares';
+  const rawRemarks = r.description || r.product || r.remarks || (r.items?.[0]?.product_name ? `${r.items[0].product_name} execution & supply` : 'Loaded from PO Management System');
+
+  return {
+    poNumber: poNum,
+    name: rawName,
+    number: rawPhone || '9876543210',
+    workingUnit: rawUnit,
+    poAmount: String(rawAmt || '0'),
+    poDate: dateVal,
+    poDocument: r.pdf || DEFAULT_SAMPLE_PDF,
+    poDocumentName: `${poNum}_Approved.pdf`,
+    remarks: rawRemarks,
+    contractorName,
+    contractorPhone,
+    contractorEmail,
+    subContractorName,
+    subContractorPhone,
+    subContractorEmail,
+    partyName: r.party_name || r.partyName || r.vendor_name || r.supplierName || '',
+  };
+};
+
+export const isDummyExternalPo = (r: any) => {
+  if (!r) return true;
+  const num = (r.poNumber || r.po_number || '').trim();
+  // Only filter out legacy hardcoded sample PO numbers like PO-2026-001..010
+  if (/^PO-2026-00[1-9]$|^PO-2026-010$/.test(num)) return true;
+  return false;
+};
+
+export const getExternalPurchaseOrders = () => {
+  let existing = getFromStorage(STORAGE_KEYS.EXTERNAL_POS);
+  if (!Array.isArray(existing)) {
+    existing = [];
+  }
+
+  // Clean out any legacy hardcoded dummy POs from storage
+  const cleanedExisting = existing.filter((p: any) => !isDummyExternalPo(p));
+  if (cleanedExisting.length !== existing.length) {
+    saveToStorage(STORAGE_KEYS.EXTERNAL_POS, cleanedExisting);
+    existing = cleanedExisting;
+  }
+
+  // Also pull from po_master in localStorage (mockStore / REST API synced)
+  const poMap = new Map<string, any>();
+  existing.forEach((po: any) => {
+    if (po?.poNumber && !isDummyExternalPo(po)) {
+      poMap.set(po.poNumber, {
+        ...po,
+        poDate: toInputDateFormat(po.poDate) || po.poDate,
+      });
+    }
+  });
+
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const rawMaster = localStorage.getItem('pms_mock_po_master');
+      if (rawMaster) {
+        const parsed = JSON.parse(rawMaster);
+        if (Array.isArray(parsed)) {
+          // Group by PO number to aggregate amounts
+          const groups: Record<string, any[]> = {};
+          parsed.forEach((r: any) => {
+            const num = (r.po_number || r.poNumber || '').trim();
+            if (num && !isDummyExternalPo(r)) {
+              if (!groups[num]) groups[num] = [];
+              groups[num].push(r);
+            }
+          });
+
+          Object.keys(groups).forEach((poNum) => {
+            const rows = groups[poNum];
+            const first = rows[0];
+            const totalAmt = rows.reduce((acc, cur) => acc + (Number(cur.amount) || Number(cur.total_amount) || Number(cur.total_po_amount) || Number(cur.totalPoAmount) || 0), 0);
+            const normalized = normalizePoMasterRecord({
+              ...first,
+              total_po_amount: totalAmt > 0 ? totalAmt : first.total_po_amount || first.totalPoAmount,
+            });
+            if (normalized && !isDummyExternalPo(normalized)) {
+              const prev = poMap.get(normalized.poNumber) || {};
+              poMap.set(normalized.poNumber, {
+                ...normalized,
+                ...prev,
+                contractorName: prev.contractorName || normalized.contractorName || '',
+                contractorPhone: prev.contractorPhone || normalized.contractorPhone || '',
+                contractorEmail: prev.contractorEmail || normalized.contractorEmail || '',
+                subContractorName: prev.subContractorName || normalized.subContractorName || '',
+                subContractorPhone: prev.subContractorPhone || normalized.subContractorPhone || '',
+                subContractorEmail: prev.subContractorEmail || normalized.subContractorEmail || '',
+                name: (prev.subContractorName || prev.contractorName) ? (prev.subContractorName || prev.contractorName) : (normalized.subContractorName || normalized.contractorName || prev.name || normalized.name || ''),
+                number: (prev.subContractorPhone || prev.contractorPhone) ? (prev.subContractorPhone || prev.contractorPhone) : (normalized.subContractorPhone || normalized.contractorPhone || prev.number || normalized.number || ''),
+                poAmount: (Number(normalized.poAmount) > 0 ? normalized.poAmount : prev.poAmount) || '0',
+                poDate: normalized.poDate || prev.poDate || '',
+                partyName: normalized.partyName || prev.partyName || '',
+              });
+            }
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Error merging po_master into external PO list:', e);
+  }
+
+  return Array.from(poMap.values());
+};
+
+export const saveExternalPurchaseOrders = (orders: any[]) => {
+  return saveToStorage(STORAGE_KEYS.EXTERNAL_POS, orders);
+};
+
+export const upsertExternalPurchaseOrder = (order: any) => {
+  const normalized = normalizePoMasterRecord(order) || order;
+  if (!normalized?.poNumber) return;
+  const current = getExternalPurchaseOrders();
+  const index = current.findIndex((p: any) => p.poNumber === normalized.poNumber);
+  let updated: any[];
+  if (index >= 0) {
+    updated = [...current];
+    const prev = updated[index] || {};
+    updated[index] = {
+      ...prev,
+      ...normalized,
+      contractorName: normalized.contractorName || prev.contractorName || '',
+      contractorPhone: normalized.contractorPhone || prev.contractorPhone || '',
+      contractorEmail: normalized.contractorEmail || prev.contractorEmail || '',
+      subContractorName: normalized.subContractorName || prev.subContractorName || '',
+      subContractorPhone: normalized.subContractorPhone || prev.subContractorPhone || '',
+      subContractorEmail: normalized.subContractorEmail || prev.subContractorEmail || '',
+      name: normalized.subContractorName || normalized.contractorName || normalized.name || prev.name || '',
+      number: normalized.subContractorPhone || normalized.contractorPhone || normalized.number || prev.number || '',
+    };
+  } else {
+    updated = [normalized, ...current];
+  }
+  saveExternalPurchaseOrders(updated);
+  return updated;
+};
+
+export const syncExternalPurchaseOrdersFromMaster = (masterRecords: any[]) => {
+  if (!Array.isArray(masterRecords) || masterRecords.length === 0) return getExternalPurchaseOrders();
+  const current = getExternalPurchaseOrders();
+  const poMap = new Map<string, any>();
+  current.forEach((p: any) => {
+    if (p?.poNumber) poMap.set(p.poNumber, p);
+  });
+
+  // Group by PO number
+  const groups: Record<string, any[]> = {};
+  masterRecords.forEach((r: any) => {
+    const num = (r.po_number || r.poNumber || '').trim();
+    if (num) {
+      if (!groups[num]) groups[num] = [];
+      groups[num].push(r);
+    }
+  });
+
+  Object.keys(groups).forEach((poNum) => {
+    const rows = groups[poNum];
+    const first = rows[0];
+    const totalAmt = rows.reduce((acc, cur) => acc + (Number(cur.amount) || Number(cur.total_amount) || Number(cur.total_po_amount) || Number(cur.totalPoAmount) || 0), 0);
+    const normalized = normalizePoMasterRecord({
+      ...first,
+      total_po_amount: totalAmt > 0 ? totalAmt : first.total_po_amount || first.totalPoAmount,
+    });
+    if (normalized) {
+      const prev = poMap.get(normalized.poNumber) || {};
+      poMap.set(normalized.poNumber, {
+        ...normalized,
+        ...prev,
+        contractorName: prev.contractorName || normalized.contractorName || '',
+        contractorPhone: prev.contractorPhone || normalized.contractorPhone || '',
+        contractorEmail: prev.contractorEmail || normalized.contractorEmail || '',
+        subContractorName: prev.subContractorName || normalized.subContractorName || '',
+        subContractorPhone: prev.subContractorPhone || normalized.subContractorPhone || '',
+        subContractorEmail: prev.subContractorEmail || normalized.subContractorEmail || '',
+        name: (prev.subContractorName || prev.contractorName) ? (prev.subContractorName || prev.contractorName) : (normalized.subContractorName || normalized.contractorName || prev.name || normalized.name || ''),
+        number: (prev.subContractorPhone || prev.contractorPhone) ? (prev.subContractorPhone || prev.contractorPhone) : (normalized.subContractorPhone || normalized.contractorPhone || prev.number || normalized.number || ''),
+      });
+    }
+  });
+
+  const merged = Array.from(poMap.values());
+  saveExternalPurchaseOrders(merged);
+  return merged;
+};
+
+// --- Product IMF Operations (PO Line Items) ---
+export const calculateProductAmount = (qty, rate, gst, discount) => {
+  const q = Number(qty) || 0;
+  const r = Number(rate) || 0;
+  const g = Number(gst) || 0;
+  const d = Number(discount) || 0;
+  const base = q * r;
+  const afterDiscount = base - (base * (d / 100));
+  const total = afterDiscount + (afterDiscount * (g / 100));
+  return Number(total.toFixed(2));
+};
+
+export const DEFAULT_PRODUCT_IMF_MAP = {
+  'PO-2026-001': [
+    { sn: 1, internalCode: 'IC-HDPE-630', product: 'HDPE Pipe PE100 PN10 630mm OD', qty: 450, issued: 420, issueReturn: 10, missing: 2, damage: 1, unit: 'Mtr', rate: 6200, gst: 18, discount: 2 },
+    { sn: 2, internalCode: 'IC-EF-630', product: 'Electrofusion Coupler 630mm PN10', qty: 45, issued: 40, issueReturn: 2, missing: 1, damage: 0, unit: 'Nos', rate: 14500, gst: 18, discount: 5 },
+    { sn: 3, internalCode: 'IC-STUB-630', product: 'HDPE Stub End Flange 630mm with Backing Ring', qty: 12, issued: 12, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 18500, gst: 18, discount: 0 },
+    { sn: 4, internalCode: 'IC-RUB-GSKT', product: 'EPDM Rubber Gasket 630mm Class 150', qty: 24, issued: 20, issueReturn: 1, missing: 0, damage: 1, unit: 'Nos', rate: 1850, gst: 18, discount: 0 },
+    { sn: 5, internalCode: 'IC-BOLT-M24', product: 'Galvanized High Tensile Bolts & Nuts M24x120mm', qty: 192, issued: 180, issueReturn: 4, missing: 3, damage: 2, unit: 'Sets', rate: 350, gst: 18, discount: 5 }
+  ],
+  'PO-2026-002': [
+    { sn: 1, internalCode: 'IC-HDPE-560', product: 'HDPE Pipe PE100 PN10 560mm OD', qty: 380, issued: 350, issueReturn: 8, missing: 2, damage: 1, unit: 'Mtr', rate: 5100, gst: 18, discount: 3 },
+    { sn: 2, internalCode: 'IC-EF-560', product: 'Electrofusion Coupler 560mm SDR 17', qty: 38, issued: 36, issueReturn: 1, missing: 0, damage: 0, unit: 'Nos', rate: 12800, gst: 18, discount: 5 },
+    { sn: 3, internalCode: 'IC-BEND-560', product: 'Fabricated Segmented Bend 560mm 45 Deg', qty: 8, issued: 8, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 24000, gst: 18, discount: 0 },
+    { sn: 4, internalCode: 'IC-TEE-560', product: 'Equal Tee HDPE 560mm PN10', qty: 4, issued: 4, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 38000, gst: 18, discount: 5 }
+  ],
+  'PO-2026-003': [
+    { sn: 1, internalCode: 'IC-EXC-BED', product: 'River Sand Bedding & Envelope Cushioning (100mm)', qty: 850, issued: 800, issueReturn: 20, missing: 0, damage: 0, unit: 'Cu.m', rate: 1850, gst: 5, discount: 0 },
+    { sn: 2, internalCode: 'IC-GEO-TXT', product: 'Non-Woven Geotextile Fabric 200 GSM Filter Membrane', qty: 3200, issued: 3000, issueReturn: 50, missing: 10, damage: 5, unit: 'Sq.m', rate: 120, gst: 12, discount: 5 },
+    { sn: 3, internalCode: 'IC-WARN-TAPE', product: 'Heavy-duty Underground Detectable Warning Tape 300mm', qty: 25, issued: 24, issueReturn: 1, missing: 0, damage: 0, unit: 'Rolls', rate: 2800, gst: 18, discount: 0 },
+    { sn: 4, internalCode: 'IC-GRAV-FLT', product: 'Graded Gravel Filter Media 10mm to 20mm', qty: 420, issued: 400, issueReturn: 10, missing: 0, damage: 0, unit: 'Cu.m', rate: 1400, gst: 5, discount: 0 }
+  ],
+  'PO-2026-004': [
+    { sn: 1, internalCode: 'IC-VLV-AV150', product: 'Kinetic Air Release Valve 150mm Flanged PN16', qty: 14, issued: 14, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 48000, gst: 18, discount: 5 },
+    { sn: 2, internalCode: 'IC-VLV-SV300', product: 'Resilient Seated Sluice Valve 300mm PN16 DI', qty: 8, issued: 8, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 72000, gst: 18, discount: 4 },
+    { sn: 3, internalCode: 'IC-CHAM-PRE', product: 'Precast RCC Valve Chamber Set (1.5m x 1.5m x 2.0m)', qty: 14, issued: 12, issueReturn: 0, missing: 0, damage: 0, unit: 'Sets', rate: 95000, gst: 18, discount: 2 },
+    { sn: 4, internalCode: 'IC-CONC-M25', product: 'Ready-Mix Concrete M25 for Thrust Block Anchoring', qty: 240, issued: 220, issueReturn: 5, missing: 0, damage: 0, unit: 'Cu.m', rate: 5800, gst: 18, discount: 0 },
+    { sn: 5, internalCode: 'IC-PR-TEST', product: 'Hydrostatic Field Testing & Disinfection Equipment Set', qty: 2, issued: 2, issueReturn: 0, missing: 0, damage: 0, unit: 'Job', rate: 185000, gst: 18, discount: 0 }
+  ],
+  'PO-2026-005': [
+    { sn: 1, internalCode: 'IC-CANAL-LIN', product: 'PCC M20 In-situ Canal Bed & Side Slope Lining', qty: 650, issued: 600, issueReturn: 15, missing: 0, damage: 0, unit: 'Cu.m', rate: 4800, gst: 18, discount: 2 },
+    { sn: 2, internalCode: 'IC-PVC-JNT', product: 'PVC Water Stop Seal Expansion Joint 230mm', qty: 300, issued: 280, issueReturn: 5, missing: 2, damage: 1, unit: 'Mtr', rate: 420, gst: 18, discount: 0 },
+    { sn: 3, internalCode: 'IC-WEEP-HOLE', product: 'PVC Weep Hole Pipes 75mm with Filter Mesh', qty: 180, issued: 170, issueReturn: 2, missing: 0, damage: 0, unit: 'Nos', rate: 260, gst: 18, discount: 0 }
+  ],
+  'PO-2026-006': [
+    { sn: 1, internalCode: 'IC-AIR-100', product: 'Tamper-Proof Air Valve 100mm Single Chamber PN10', qty: 18, issued: 18, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 32000, gst: 18, discount: 5 },
+    { sn: 2, internalCode: 'IC-SCOUR-200', product: 'Scour Valve Assembly 200mm PN16 with Dismantling Joint', qty: 6, issued: 6, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 54000, gst: 18, discount: 3 },
+    { sn: 3, internalCode: 'IC-CI-SURF', product: 'Cast Iron Heavy Duty Surface Box for Valve Oper.', qty: 24, issued: 22, issueReturn: 1, missing: 0, damage: 0, unit: 'Nos', rate: 3500, gst: 18, discount: 0 }
+  ],
+  'PO-2026-007': [
+    { sn: 1, internalCode: 'IC-DRN-CORR', product: 'Corrugated Perforated Sub-Surface Drainage Pipe 200mm', qty: 2400, issued: 2250, issueReturn: 30, missing: 10, damage: 5, unit: 'Mtr', rate: 980, gst: 18, discount: 4 },
+    { sn: 2, internalCode: 'IC-OUTLET-BOX', product: 'Field Drainage Outlet Collector Chamber with Sump', qty: 36, issued: 34, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 28000, gst: 18, discount: 2 },
+    { sn: 3, internalCode: 'IC-NON-RTN', product: 'Flap Non-Return Gate Valve 200mm HDPE/CI', qty: 36, issued: 36, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 16500, gst: 18, discount: 0 }
+  ],
+  'PO-2026-008': [
+    { sn: 1, internalCode: 'IC-MS-PIPE-700', product: 'Mild Steel Spiral Welded Pipe 711mm OD (6mm Thk)', qty: 320, issued: 300, issueReturn: 5, missing: 1, damage: 1, unit: 'Mtr', rate: 4600, gst: 18, discount: 3 },
+    { sn: 2, internalCode: 'IC-DI-K9-600', product: 'Ductile Iron K9 Class Socket & Spigot Pipe 600mm', qty: 210, issued: 200, issueReturn: 2, missing: 0, damage: 0, unit: 'Mtr', rate: 5800, gst: 18, discount: 2 },
+    { sn: 3, internalCode: 'IC-COAT-EXT', product: 'External 3-Layer Polyethylene (3LPE) Anti-Corrosion Coating', qty: 320, issued: 300, issueReturn: 5, missing: 0, damage: 1, unit: 'Mtr', rate: 850, gst: 18, discount: 0 }
+  ],
+  'PO-2026-009': [
+    { sn: 1, internalCode: 'IC-FLT-ENV', product: 'Washed River Gravel Sub-surface Filter Media (5-10mm)', qty: 1100, issued: 1050, issueReturn: 20, missing: 0, damage: 0, unit: 'Cu.m', rate: 1650, gst: 5, discount: 0 },
+    { sn: 2, internalCode: 'IC-SYN-MAT', product: 'Synthetic Drainage Core Geomat with Non-woven Filter', qty: 1800, issued: 1700, issueReturn: 25, missing: 5, damage: 2, unit: 'Sq.m', rate: 380, gst: 18, discount: 5 },
+    { sn: 3, internalCode: 'IC-INSPEC-WELL', product: 'Precast RCC Sub-surface Inspection Well Dia 900mm', qty: 16, issued: 15, issueReturn: 0, missing: 0, damage: 0, unit: 'Sets', rate: 42000, gst: 18, discount: 0 }
+  ],
+  'PO-2026-010': [
+    { sn: 1, internalCode: 'IC-HDPE-900', product: 'HDPE Pipe PE100 PN16 900mm OD Feeder Main', qty: 250, issued: 230, issueReturn: 5, missing: 1, damage: 0, unit: 'Mtr', rate: 11500, gst: 18, discount: 4 },
+    { sn: 2, internalCode: 'IC-BUTT-JNT', product: 'Butt Fusion Jointing & Hydrostatic Pressure Testing', qty: 250, issued: 230, issueReturn: 0, missing: 0, damage: 0, unit: 'Mtr', rate: 1400, gst: 18, discount: 0 },
+    { sn: 3, internalCode: 'IC-AIR-200', product: 'Kinetic Air Valve Triple Action 200mm Flanged PN16', qty: 6, issued: 6, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 68000, gst: 18, discount: 5 }
+  ]
+};
+
+export const getProductIMFData = () => {
+  const existing = getFromStorage(STORAGE_KEYS.PRODUCT_IMF);
+  if (existing && typeof existing === 'object' && Object.keys(existing).length > 0) {
+    return existing;
+  }
+  saveToStorage(STORAGE_KEYS.PRODUCT_IMF, DEFAULT_PRODUCT_IMF_MAP);
+  return DEFAULT_PRODUCT_IMF_MAP;
+};
+
+export const saveProductIMFData = (data) => {
+  return saveToStorage(STORAGE_KEYS.PRODUCT_IMF, data);
+};
+
+export const getProductsByPONumber = (poNumber) => {
+  if (!poNumber) return [];
+  const allData = getProductIMFData();
+  const cleanPo = String(poNumber).trim();
+  
+  if (allData[cleanPo] && Array.isArray(allData[cleanPo])) {
+    return allData[cleanPo].map((item, idx) => {
+      const q = Number(item.qty) || 0;
+      const defaultIssued = Math.max(0, Math.round(q * 0.9));
+      const defaultReturn = Math.max(0, Math.round(q * 0.02));
+      const defaultMissing = Math.max(0, Math.round(q * 0.01));
+      const defaultDamage = Math.max(0, Math.round(q * 0.005));
+      return {
+        ...item,
+        sn: item.sn ?? (idx + 1),
+        issued: item.issued !== undefined ? Number(item.issued) : defaultIssued,
+        issueReturn: item.issueReturn !== undefined ? Number(item.issueReturn) : defaultReturn,
+        missing: item.missing !== undefined ? Number(item.missing) : defaultMissing,
+        damage: item.damage !== undefined ? Number(item.damage) : defaultDamage,
+        amount: calculateProductAmount(item.qty, item.rate, item.gst, item.discount)
+      };
+    });
+  }
+
+  // Fallback for any other PO number: dynamically create standard pipeline items
+  const generated = [
+    { sn: 1, internalCode: 'IC-HDPE-630', product: 'HDPE Pipe PE100 PN10 630mm OD', qty: 300, issued: 280, issueReturn: 8, missing: 2, damage: 1, unit: 'Mtr', rate: 6200, gst: 18, discount: 2 },
+    { sn: 2, internalCode: 'IC-EF-630', product: 'Electrofusion Coupler 630mm PN10', qty: 30, issued: 28, issueReturn: 1, missing: 0, damage: 0, unit: 'Nos', rate: 14500, gst: 18, discount: 5 },
+    { sn: 3, internalCode: 'IC-VLV-AV100', product: 'Kinetic Air Valve 100mm Flanged PN16', qty: 6, issued: 6, issueReturn: 0, missing: 0, damage: 0, unit: 'Nos', rate: 32000, gst: 18, discount: 0 },
+    { sn: 4, internalCode: 'IC-EXC-BED', product: 'River Sand Bedding & Trench Cushioning', qty: 450, issued: 400, issueReturn: 12, missing: 5, damage: 2, unit: 'Cu.m', rate: 1850, gst: 5, discount: 0 }
+  ];
+
+  return generated.map((item, idx) => ({
+    ...item,
+    sn: item.sn ?? (idx + 1),
+    issued: item.issued ?? Math.max(0, Math.round((Number(item.qty) || 0) * 0.9)),
+    issueReturn: item.issueReturn ?? Math.max(0, Math.round((Number(item.qty) || 0) * 0.02)),
+    missing: item.missing ?? Math.max(0, Math.round((Number(item.qty) || 0) * 0.01)),
+    damage: item.damage ?? Math.max(0, Math.round((Number(item.qty) || 0) * 0.005)),
+    amount: calculateProductAmount(item.qty, item.rate, item.gst, item.discount)
+  }));
+};
+
+export const saveProductsForPONumber = (poNumber, items) => {
+  if (!poNumber) return;
+  const allData = { ...getProductIMFData() };
+  allData[String(poNumber).trim()] = items;
+  saveProductIMFData(allData);
+};
+
+// --- Documentation Operations ---
+export const DEFAULT_DOCUMENT_FILES = [];
+
+export const getDocumentationFiles = () => {
+  const data = getFromStorage(STORAGE_KEYS.DOCUMENTATION);
+  if (data && Array.isArray(data)) {
+    // If it was the old project-based array, reset to empty
+    if (data.length > 0 && data[0].documents !== undefined) {
+      saveToStorage(STORAGE_KEYS.DOCUMENTATION, []);
+      return [];
+    }
+    // Filter out hardcoded sample IDs (doc-001..doc-006) so only user-uploaded documents appear
+    const userOnly = data.filter(d => d.id && !d.id.startsWith('doc-00'));
+    if (userOnly.length !== data.length) {
+      saveToStorage(STORAGE_KEYS.DOCUMENTATION, userOnly);
+      return userOnly;
+    }
+    return data;
+  }
+  saveToStorage(STORAGE_KEYS.DOCUMENTATION, []);
+  return [];
+};
+
+export const saveDocumentationFiles = (docs) => {
+  return saveToStorage(STORAGE_KEYS.DOCUMENTATION, docs);
+};
+
+export const addDocumentationFile = (doc) => {
+  const all = getDocumentationFiles();
+  const newDoc = {
+    id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    fileName: doc.fileName || 'document.docx',
+    title: doc.title || doc.fileName || 'Untitled Document',
+    docType: doc.docType || 'General Document',
+    projectName: doc.projectName || '',
+    agreementNo: doc.agreementNo || '',
+    recipient: doc.recipient || '',
+    refNo: doc.refNo || '',
+    date: doc.date || '2026-10-01',
+    fileSize: doc.fileSize || 'Unknown',
+    fileType: doc.fileType || (doc.fileName?.split('.').pop()?.toUpperCase() || 'FILE'),
+    fileData: doc.fileData || '',
+    fileUrl: doc.fileUrl || '',
+    remarks: doc.remarks || '',
+    uploadedBy: 'Admin User',
+    uploadedAt: new Date().toISOString()
+  };
+  const updated = [newDoc, ...all];
+  saveDocumentationFiles(updated);
+  return newDoc;
+};
+
+export const updateDocumentationFile = (id, fields) => {
+  const all = getDocumentationFiles();
+  const idx = all.findIndex(d => d.id === id);
+  if (idx !== -1) {
+    all[idx] = { ...all[idx], ...fields, updatedAt: new Date().toISOString() };
+    saveDocumentationFiles(all);
+    return all[idx];
+  }
+  return null;
+};
+
+export const deleteDocumentationFile = (id) => {
+  const all = getDocumentationFiles();
+  const filtered = all.filter(d => d.id !== id);
+  saveDocumentationFiles(filtered);
+  return filtered;
+};
+
+export const getDocumentations = () => {
+  return getFromStorage(STORAGE_KEYS.DOCUMENTATION) || [];
+};
+
+export const saveDocumentations = (data) => saveToStorage(STORAGE_KEYS.DOCUMENTATION, data);
+
+export const getDocumentationForProject = (projectNo) => {
+  if (!projectNo) return null;
+  return getDocumentations().find(d => d.projectNo === projectNo) || null;
+};
+
+export const addDocumentToProject = (projectNo, doc) => {
+  if (!projectNo) return null;
+  const all = getDocumentations();
+  const idx = all.findIndex(d => d.projectNo === projectNo);
+  const now = new Date().toISOString();
+  const newDoc = {
+    id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    title: doc.title || 'Document',
+    docType: doc.docType || 'General Document',
+    fileName: doc.fileName || 'document.pdf',
+    fileData: doc.fileData || '',
+    fileSize: doc.fileSize || 0,
+    remarks: doc.remarks || '',
+    uploadDate: doc.uploadDate || now,
+    uploadedAt: now
+  };
+
+  if (idx >= 0) {
+    all[idx].documents = [newDoc, ...(all[idx].documents || [])];
+    all[idx].updatedAt = now;
+  } else {
+    all.push({
+      id: projectNo,
+      projectNo,
+      documents: [newDoc],
+      updatedAt: now
+    });
+  }
+  saveDocumentations(all);
+  return newDoc;
+};
+
+export const deleteDocumentFromProject = (projectNo, docId) => {
+  if (!projectNo || !docId) return;
+  const all = getDocumentations();
+  const idx = all.findIndex(d => d.projectNo === projectNo);
+  if (idx >= 0) {
+    all[idx].documents = (all[idx].documents || []).filter(d => d.id !== docId);
+    all[idx].updatedAt = new Date().toISOString();
+    saveDocumentations(all);
+  }
+};
+
+export const updateProjectOrMinorDetails = (projectNo, updatedFields) => {
+  if (!projectNo || !updatedFields) return null;
+  const projects = getProjects();
+  const pIdx = projects.findIndex(p => p.serialNo === projectNo || p.id === projectNo);
+  if (pIdx !== -1) {
+    projects[pIdx] = { ...projects[pIdx], ...updatedFields };
+    saveProjects(projects);
+    return projects[pIdx];
+  }
+  const minors = getMinors();
+  const mIdx = minors.findIndex(m => m.id === projectNo || m.serialNo === projectNo);
+  if (mIdx !== -1) {
+    minors[mIdx] = { ...minors[mIdx], ...updatedFields };
+    saveMinors(minors);
+    return minors[mIdx];
+  }
+  return null;
+};
+
+// --- Email Logs Operations ---
+export const getEmailLogs = () => {
+  return getFromStorage(STORAGE_KEYS.EMAIL_LOGS) || [];
+};
+
+export const saveEmailLogs = (logs) => {
+  return saveToStorage(STORAGE_KEYS.EMAIL_LOGS, logs);
+};
+
+export const addEmailLog = (log) => {
+  const all = getEmailLogs();
+  const now = new Date().toISOString();
+  const newLog = {
+    id: `elog_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    projectNo: log.projectNo || '',
+    projectName: log.projectName || '',
+    agreementNo: log.agreementNo || '',
+    to: log.to || '',
+    cc: log.cc || '',
+    subject: log.subject || '',
+    body: log.body || '',
+    attachedDocs: Array.isArray(log.attachedDocs) ? log.attachedDocs : [],
+    sentAt: log.sentAt || now,
+    status: log.status || 'Sent (Simulated)',
+    sender: log.sender || 'Pooja Construction Project Team'
+  };
+  const updated = [newLog, ...all];
+  saveEmailLogs(updated);
+  return newLog;
+};
+
+export const getEmailLogsForProject = (projectName, projectNo, agreementNo) => {
+  const pName = (projectName || '').toLowerCase().trim();
+  const pNo = (projectNo || '').toLowerCase().trim();
+  const agrNo = (agreementNo || '').toLowerCase().trim();
+
+  return getEmailLogs().filter(l => {
+    const lp = (l.projectName || '').toLowerCase().trim();
+    const lno = (l.projectNo || '').toLowerCase().trim();
+    const lagr = (l.agreementNo || '').toLowerCase().trim();
+
+    if (pName && (lp === pName || lp.includes(pName) || pName.includes(lp))) return true;
+    if (pNo && (lno === pNo || lp.includes(pNo))) return true;
+    if (agrNo && lagr && lagr === agrNo) return true;
+    return false;
+  });
+};
+
+
+

@@ -1,0 +1,2087 @@
+import { useSheets } from '@/context/SheetsContext';
+import { useProject } from '@/context/ProjectContext';
+import type { ColumnDef, Row } from '@tanstack/react-table';
+import { useEffect, useState } from 'react';
+import DataTable from '@/components/element/DataTable';
+import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogTitle,
+    DialogTrigger,
+    DialogHeader,
+    DialogFooter,
+    DialogClose,
+} from '@/components/ui/dialog';
+import { z } from 'zod';
+import { useFieldArray, useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { PuffLoader as Loader } from 'react-spinners';
+import { toast } from 'sonner';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { UserCheck, PenSquare, CheckSquare, X, Search, UserCog, Trash, Sparkles } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import Heading from '@/components/element/Heading';
+import { TabButtons } from '@/components/element/TabButtons';
+import { Pill } from '@/components/ui/pill';
+import { formatDate, formatDateTime } from '@/lib/utils';
+import { uploadFile } from '@/lib/fetchers';
+import { AttachmentUploadField } from '@/components/element/AttachmentUploadField';
+import { useAttachmentUpload } from '@/hooks/useAttachmentUpload';
+import {
+    fetchPendingVendorUpdates,
+    fetchCompletedVendorUpdates,
+    fetchIndentQuotes,
+    updateVendorRateRegular,
+    updateVendorRateThreeParty,
+    updateVendorHistoryFields,
+    type VendorPendingRecord,
+    type VendorHistoryRecord,
+    type IndentQuote,
+} from '@/services/vendorUpdateService';
+import { resetIndentStage } from '@/services/indentService';
+import { canDeleteStoreStage } from '@/lib/roleAccess';
+import StageDeleteDialog from '@/components/element/StageDeleteDialog';
+
+// Type aliases for local use — imported from vendorUpdateService
+type VendorUpdateData = VendorPendingRecord;
+type HistoryData = VendorHistoryRecord;
+
+export default () => {
+    const { masterSheet: options } = useSheets();
+    const { user } = useAuth();
+    const { effectivePermittedFirms } = useProject();
+    const [selectedIndent, setSelectedIndent] = useState<VendorUpdateData | null>(null);
+    const [historyData, setHistoryData] = useState<HistoryData[]>([]);
+    const [tableData, setTableData] = useState<VendorUpdateData[]>([]);
+    const [filteredTableData, setFilteredTableData] = useState<VendorUpdateData[]>([]);
+    const [filteredHistoryData, setFilteredHistoryData] = useState<HistoryData[]>([]);
+    const [deleteTarget, setDeleteTarget] = useState<HistoryData | null>(null);
+    const [openDialog, setOpenDialog] = useState(false);
+    const [activeTab, setActiveTab] = useState<'pending' | 'history'>('pending');
+    const [dialogStep, setDialogStep] = useState(1);
+
+    const [amountToDetermineType, setAmountToDetermineType] = useState<number>(0);
+    const [computedVendorType, setComputedVendorType] = useState<'Regular' | 'Three Party'>(
+        'Regular'
+    );
+    const [editingRow, setEditingRow] = useState<number | null>(null);
+    const [editValues, setEditValues] = useState<Partial<HistoryData>>({});
+    const [dataLoading, setDataLoading] = useState(false);
+
+    // Filter states
+    const [selectedDate, setSelectedDate] = useState<string>('');
+    const [selectedUOM, setSelectedUOM] = useState<string>('');
+    const [searchQuery, setSearchQuery] = useState<string>('');
+    const [selectedHistoryDate, setSelectedHistoryDate] = useState<string>('');
+    const [selectedHistoryUOM, setSelectedHistoryUOM] = useState<string>('');
+    const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
+    const [searchTermVendor, setSearchTermVendor] = useState('');
+    const [indentQuotes, setIndentQuotes] = useState<IndentQuote[]>([]);
+    const normalizeVendorKey = (value?: string) => (value || '').trim().toLowerCase();
+    const hasVendorRate = (quote: any) => Number(quote?.vendor_rate) > 0;
+    const findQuoteByVendorName = (vendorName?: string) => {
+        const normalizedName = normalizeVendorKey(vendorName);
+        if (!normalizedName) return undefined;
+        return indentQuotes.find((q) => normalizeVendorKey(q?.supplierName) === normalizedName);
+    };
+    const getSortedVendorNames = (searchTerm: string) => {
+        const uniqueVendors = Array.from(
+            new Set<string>(
+                (options?.vendorNames || [])
+                    .map((name) => (name || '').trim())
+                    .filter(Boolean)
+            )
+        );
+        return uniqueVendors
+            .filter((name) => name.toLowerCase().includes(searchTerm.toLowerCase()))
+            .sort((a, b) => {
+                const hasRateA = hasVendorRate(findQuoteByVendorName(a));
+                const hasRateB = hasVendorRate(findQuoteByVendorName(b));
+                if (hasRateA && !hasRateB) return -1;
+                if (!hasRateA && hasRateB) return 1;
+                return a.localeCompare(b);
+            });
+    };
+
+    // Fetch pending vendor updates from backend API
+    const loadPendingVendorUpdates = async () => {
+        try {
+            setDataLoading(true);
+            const data = await fetchPendingVendorUpdates(effectivePermittedFirms);
+            setTableData(data);
+            setFilteredTableData(data);
+        } catch (err) {
+            console.error('Error fetching pending vendor updates:', err);
+            toast.error('Failed to fetch pending vendor updates');
+        } finally {
+            setDataLoading(false);
+        }
+    };
+
+    // Fetch completed vendor updates from backend API
+    const loadCompletedVendorUpdates = async () => {
+        try {
+            setDataLoading(true);
+            const data = await fetchCompletedVendorUpdates(effectivePermittedFirms);
+            setHistoryData(data);
+            setFilteredHistoryData(data);
+        } catch (err) {
+            console.error('Error fetching completed vendor updates:', err);
+            toast.error('Failed to fetch completed vendor updates');
+        } finally {
+            setDataLoading(false);
+        }
+    };
+
+    const loadIndentQuotes = async () => {
+        if (!selectedIndent) return;
+        try {
+            const data = await fetchIndentQuotes(selectedIndent.indentNo, selectedIndent.product);
+            setIndentQuotes(data);
+        } catch (err) {
+            console.error('Error fetching indent quotes:', err);
+        }
+    };
+
+    useEffect(() => {
+        if (selectedIndent && openDialog) {
+            loadIndentQuotes();
+        } else {
+            setIndentQuotes([]);
+        }
+    }, [selectedIndent, openDialog]);
+
+    // Fetch data on mount and when active project changes
+    useEffect(() => {
+        loadPendingVendorUpdates();
+        loadCompletedVendorUpdates();
+    }, [effectivePermittedFirms]);
+
+    // Filter pending data by date, UOM, and search query
+    useEffect(() => {
+        let filtered = [...tableData];
+
+        if (selectedDate) {
+            filtered = filtered.filter((item: any) => {
+                const itemDate = new Date(item.planned2).toISOString().split('T')[0];
+                return itemDate === selectedDate;
+            });
+        }
+
+        if (selectedUOM && selectedUOM !== '__all__') {
+            filtered = filtered.filter((item: any) => item.uom === selectedUOM);
+        }
+
+        if (searchQuery.trim()) {
+            const query = searchQuery.toLowerCase();
+            filtered = filtered.filter(
+                (item: any) =>
+                    item.indentNo.toLowerCase().includes(query) ||
+                    item.firmNameMatch?.toLowerCase().includes(query) ||
+                    item.indenter.toLowerCase().includes(query) ||
+                    // item.department.toLowerCase().includes(query) ||
+                    item.product.toLowerCase().includes(query) ||
+                    item.specifications.toLowerCase().includes(query)
+            );
+        }
+
+        setFilteredTableData(filtered);
+    }, [selectedDate, selectedUOM, searchQuery, tableData]);
+
+    // Filter history data by date, UOM, and search query
+    useEffect(() => {
+        let filtered = [...historyData];
+
+        if (selectedHistoryDate) {
+            filtered = filtered.filter((item: any) => {
+                const itemDate = new Date(item.actual2).toISOString().split('T')[0];
+                return itemDate === selectedHistoryDate;
+            });
+        }
+
+        if (selectedHistoryUOM && selectedHistoryUOM !== '__all__') {
+            filtered = filtered.filter((item: any) => item.uom === selectedHistoryUOM);
+        }
+
+        if (historySearchQuery.trim()) {
+            const query = historySearchQuery.toLowerCase();
+            filtered = filtered.filter(
+                (item: any) =>
+                    item.indentNo.toLowerCase().includes(query) ||
+                    item.firmNameMatch?.toLowerCase().includes(query) ||
+                    item.indenter.toLowerCase().includes(query) ||
+                    // item.department.toLowerCase().includes(query) ||
+                    item.product.toLowerCase().includes(query) ||
+                    item.specifications.toLowerCase().includes(query)
+            );
+        }
+
+        setFilteredHistoryData(filtered);
+    }, [selectedHistoryDate, selectedHistoryUOM, historySearchQuery, historyData]);
+
+    // Get unique UOMs for filter dropdown
+    const uniqueUOMs = Array.from(new Set(tableData.map((item: any) => item.uom))).sort();
+    const uniqueHistoryUOMs = Array.from(new Set(historyData.map((item: any) => item.uom))).sort();
+
+    const handleEditClick = (row: HistoryData) => {
+        setEditingRow(row.id);
+        setEditValues({
+            quantity: row.quantity,
+            uom: row.uom,
+            vendorType: row.vendorType,
+        });
+    };
+
+    const handleCancelEdit = () => {
+        setEditingRow(null);
+        setEditValues({});
+    };
+
+    const handleSaveEdit = async (id: number) => {
+        try {
+            await updateVendorHistoryFields(editingRow!, {
+                approved_quantity: editValues.quantity,
+                uom: editValues.uom,
+                vendor_type: editValues.vendorType,
+            });
+
+            toast.success(`Updated indent ${id}`);
+            await loadCompletedVendorUpdates();
+            setEditingRow(null);
+            setEditValues({});
+        } catch (err) {
+            console.error('Error updating indent:', err);
+            toast.error('Failed to update indent');
+        }
+    };
+
+    const handleInputChange = (field: keyof HistoryData, value: any) => {
+        setEditValues((prev) => ({ ...prev, [field]: value }));
+    };
+
+    // Clear all filters function
+    const clearAllFilters = () => {
+        setSelectedDate('');
+        setSelectedUOM('');
+        setSearchQuery('');
+    };
+
+    const clearAllHistoryFilters = () => {
+        setSelectedHistoryDate('');
+        setSelectedHistoryUOM('');
+        setHistorySearchQuery('');
+    };
+
+    // Matches the (file, id, onProgress?) => Promise<string> shape
+    // useAttachmentUpload expects — the second param is unused, kept only
+    // for call-site consistency with the rest of the app's upload functions.
+    const uploadComparisonSheet = async (file: File, _id: string, onProgress?: (percent: number) => void): Promise<string> => {
+        return uploadFile({ file, folderId: 'store-and-inventory/vendor-rate-update', subFolder: 'comparison-sheets', onProgress });
+    };
+
+    // Creating table columns
+    const columns: ColumnDef<VendorUpdateData>[] = [
+        {
+            header: 'Action',
+            id: 'action',
+            cell: ({ row }: { row: Row<VendorUpdateData> }) => {
+                const indent = row.original;
+                return (
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 px-2 text-xs flex items-center gap-1"
+                            onClick={() => {
+                                setSelectedIndent(indent);
+                                setDialogStep(1);
+                                setAmountToDetermineType(0);
+                                setComputedVendorType(indent.vendorType);
+                                comparisonSheetAttachment.reset();
+                                setOpenDialog(true);
+                            }}
+                        >
+                            <PenSquare className="h-3.5 w-3.5 text-slate-600" />
+                            Update
+                        </Button>
+                    </div>
+                );
+            },
+        },
+        {
+            accessorKey: 'indentNo',
+            header: 'Indent No.',
+        },
+        {
+            accessorKey: 'firmNameMatch',
+            header: 'Project Name',
+        },
+        {
+            accessorKey: 'indenter',
+            header: 'Indenter',
+        },
+
+        {
+            accessorKey: 'specifications',
+            header: 'Specifications',
+            cell: ({ getValue }) => (
+                <div className="max-w-[200px] break-words whitespace-normal">
+                    {getValue() as string}
+                </div>
+            ),
+        },
+        {
+            accessorKey: 'product',
+            header: 'Product',
+            cell: ({ getValue }) => (
+                <div className="max-w-[150px] break-words whitespace-normal">
+                    {getValue() as string}
+                </div>
+            ),
+        },
+        {
+            accessorKey: 'quantity',
+            header: 'Quantity',
+        },
+        {
+            accessorKey: 'uom',
+            header: 'UOM',
+        },
+        {
+            accessorKey: 'vendorType',
+            header: 'Vendor Type',
+            cell: ({ row }) => {
+                const status = row.original.vendorType;
+                const variant = status === 'Regular' ? 'primary' : 'secondary';
+                return <Pill variant={variant}>{status}</Pill>;
+            },
+        },
+        {
+            accessorKey: 'planned2',
+            header: 'Planned Date',
+            cell: ({ row }) => formatDateTime(row.original.planned2),
+        },
+    ];
+
+    const historyColumns: ColumnDef<HistoryData>[] = [
+        {
+            id: 'action',
+            header: 'Action',
+            cell: ({ row }: { row: Row<HistoryData> }) => {
+                const canDelete = canDeleteStoreStage(user, 'vendor_rates');
+                if (!canDelete) return null;
+                return (
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleteTarget(row.original)}
+                        className="flex items-center gap-1 text-red-600 hover:text-red-800 hover:bg-red-50 h-7 px-2 text-xs"
+                        title="Delete Vendor Rate Data"
+                    >
+                        <Trash className="h-3.5 w-3.5" />
+                        Delete
+                    </Button>
+                );
+            },
+        },
+        {
+            accessorKey: 'date',
+            header: 'Date',
+        },
+        {
+            accessorKey: 'indentNo',
+            header: 'Indent No.',
+        },
+        {
+            accessorKey: 'firmNameMatch',
+            header: 'Project Name',
+        },
+        {
+            accessorKey: 'indenter',
+            header: 'Indenter',
+        },
+
+        {
+            accessorKey: 'specifications',
+            header: 'Specifications',
+            cell: ({ getValue }) => (
+                <div className="max-w-[200px] break-words whitespace-normal">
+                    {getValue() as string}
+                </div>
+            ),
+        },
+        {
+            accessorKey: 'product',
+            header: 'Product',
+            cell: ({ getValue }) => (
+                <div className="max-w-[150px] break-words whitespace-normal">
+                    {getValue() as string}
+                </div>
+            ),
+        },
+        {
+            accessorKey: 'quantity',
+            header: 'Quantity',
+        },
+        {
+            accessorKey: 'rate',
+            header: 'Rate',
+            cell: ({ row }) => {
+                const rate = row.original.rate;
+                const vendorType = row.original.vendorType;
+                if (!rate && vendorType === 'Three Party') {
+                    return <span className="text-muted-foreground">Not Decided</span>;
+                }
+                return <>&#8377;{rate}</>;
+            },
+        },
+        {
+            accessorKey: 'uom',
+            header: 'UOM',
+        },
+        {
+            accessorKey: 'vendorType',
+            header: 'Vendor Type',
+            cell: ({ row }) => {
+                const status = row.original.vendorType;
+                const variant = status === 'Regular' ? 'primary' : 'secondary';
+                return <Pill variant={variant}>{status}</Pill>;
+            },
+        },
+        {
+            accessorKey: 'planned2',
+            header: 'Planned Date',
+            cell: ({ row }) =>
+                row.original.planned2 ? formatDateTime(row.original.planned2) : '-',
+        },
+        {
+            accessorKey: 'actual2',
+            header: 'Actual Date',
+            cell: ({ row }) => (row.original.actual2 ? formatDateTime(row.original.actual2) : '-'),
+        },
+    ];
+
+    // Creating Regular Vendor form
+    const regularSchema = z.object({
+        vendorName: z.string().min(1, 'Vendor name is required'),
+        rate: z.preprocess(
+            (val) => (val === '' || val === null || val === undefined ? 0 : Number(val)),
+            z.number().min(0, 'Rate must be 0 or positive')
+        ),
+        gstPercent: z.preprocess(
+            (val) => (val === '' || val === null || val === undefined ? 0 : Number(val)),
+            z.number().min(0, 'GST % is required')
+        ),
+        paymentTerm: z.string().min(1, 'Payment term is required'),
+        advancePercent: z.preprocess(
+            (val) => (val === '' || val === null || val === undefined || isNaN(Number(val)) ? undefined : Number(val)),
+            z.number().min(0).max(100).optional()
+        ),
+        quotationNo: z.string().optional(),
+        quotationDate: z.string().optional(),
+        deliveryTime: z.preprocess(
+            (val) => (val === '' || val === null || val === undefined || isNaN(Number(val)) ? undefined : Number(val)),
+            z.number().gt(0, 'Delivery time must be greater than 0').optional()
+        ),
+        make: z.string().optional(),
+    });
+
+    type RegularFormValues = z.infer<typeof regularSchema>;
+
+    const regularForm = useForm<any>({
+        resolver: zodResolver(regularSchema) as any,
+        defaultValues: {
+            vendorName: '',
+            rate: 0,
+            gstPercent: 0,
+            paymentTerm: '',
+            advancePercent: 0,
+            quotationNo: '',
+            quotationDate: '',
+            deliveryTime: 0,
+            make: '',
+        },
+    });
+
+    async function onSubmitRegular(values: any) {
+        try {
+            if (!selectedIndent?.id) {
+                toast.error('No indent selected');
+                return;
+            }
+
+            const now = new Date().toISOString();
+
+            await updateVendorRateRegular(selectedIndent.id, {
+                actual2: now,
+                planned3: now,
+                po_requred: 'Yes', // Automatically set PO Required to Yes
+                vendor_name1: values.vendorName,
+                rate1: values.rate.toString(),
+                vendor1_rank: '', // Ranks assigned in Technical Approval
+                select_rate_type1: 'Basic Rate',
+                with_tax_or_not1: 'No',
+                tax_value1: (values.gstPercent || 0).toString(),
+                payment_term1: values.paymentTerm,
+                advance_percent1: values.advancePercent?.toString() || '0',
+                quotation_no1: values.quotationNo || '',
+                quotation_date1: values.quotationDate || '',
+                delivery_time1: values.deliveryTime?.toString() || '',
+                make1: values.make || '',
+                vendor_type: computedVendorType,
+            });
+
+            toast.success(`Updated vendor of ${selectedIndent.indentNo}`);
+            setOpenDialog(false);
+            regularForm.reset();
+            setSelectedIndent(null);
+            await loadPendingVendorUpdates();
+            await loadCompletedVendorUpdates();
+        } catch (error) {
+            console.error('Error updating vendor:', error);
+            toast.error('Failed to update vendor');
+        }
+    }
+
+    // Creating Three Party Vendor form
+    const threePartySchema = z.object({
+        vendors: z
+            .array(
+                z.object({
+                    vendorName: z.string().optional(),
+                    rate: z.preprocess(
+                        (val) => (val === '' || val === null || val === undefined || isNaN(Number(val)) ? undefined : Number(val)),
+                        z.number().optional()
+                    ),
+                    gstPercent: z.preprocess(
+                        (val) => (val === '' || val === null || val === undefined || isNaN(Number(val)) ? undefined : Number(val)),
+                        z.number().optional()
+                    ),
+                    paymentTerm: z.string().optional(),
+                    advancePercent: z.preprocess(
+                        (val) => (val === '' || val === null || val === undefined || isNaN(Number(val)) ? undefined : Number(val)),
+                        z.number().optional()
+                    ),
+                    whatsappNumber: z.string().optional(),
+                    emailId: z.string().optional(),
+                    quotationNo: z.string().optional(),
+                    quotationDate: z.string().optional(),
+                    deliveryTime: z.preprocess(
+                        (val) => (val === '' || val === null || val === undefined || isNaN(Number(val)) ? undefined : Number(val)),
+                        z.number().optional()
+                    ),
+                    make: z.string().optional(),
+                })
+            )
+            .length(3)
+            .superRefine((vendors, ctx) => {
+                // Vendors 1 and 2 are mandatory
+                [0, 1].forEach((index: any) => {
+                    const v = vendors[index];
+                    if (!v.vendorName?.trim()) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Vendor Name is required',
+                            path: [index, 'vendorName'],
+                        });
+                    }
+                    if (v.rate === undefined || v.rate < 0) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Rate must be >= 0',
+                            path: [index, 'rate'],
+                        });
+                    }
+                    if (!v.paymentTerm) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Pay terms required',
+                            path: [index, 'paymentTerm'],
+                        });
+                    }
+                    if (!v.whatsappNumber || v.whatsappNumber.length < 10) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Min 10 digits',
+                            path: [index, 'whatsappNumber'],
+                        });
+                    }
+                    if (!v.emailId || !/^\S+@\S+\.\S+$/.test(v.emailId)) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Invalid email',
+                            path: [index, 'emailId'],
+                        });
+                    }
+                });
+
+                // Vendor 3 is optional, but if vendorName is entered, validate others
+                const v3 = vendors[2];
+                if (v3.vendorName?.trim()) {
+                    if (v3.rate === undefined || v3.rate < 0) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Rate must be >= 0',
+                            path: [2, 'rate'],
+                        });
+                    }
+                    if (!v3.paymentTerm) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Pay terms required',
+                            path: [2, 'paymentTerm'],
+                        });
+                    }
+                    if (v3.whatsappNumber && v3.whatsappNumber.length < 10) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Min 10 digits',
+                            path: [2, 'whatsappNumber'],
+                        });
+                    }
+                    if (v3.emailId && !/^\S+@\S+\.\S+$/.test(v3.emailId)) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'Invalid email',
+                            path: [2, 'emailId'],
+                        });
+                    }
+                }
+            }),
+        comparisonSheet: z.any().optional(),
+        productCode: z.string().optional(),
+    });
+
+    const threePartyForm = useForm<any>({
+        resolver: zodResolver(threePartySchema) as any,
+        defaultValues: {
+            productCode: '',
+            vendors: [
+                {
+                    vendorName: '',
+                    rate: 0,
+                    gstPercent: 0,
+                    paymentTerm: '',
+                    advancePercent: 0,
+                    whatsappNumber: '',
+                    emailId: '',
+                    quotationNo: '',
+                    quotationDate: '',
+                    deliveryTime: 0,
+                    make: '',
+                },
+                {
+                    vendorName: '',
+                    rate: 0,
+                    gstPercent: 0,
+                    paymentTerm: '',
+                    advancePercent: 0,
+                    whatsappNumber: '',
+                    emailId: '',
+                    quotationNo: '',
+                    quotationDate: '',
+                    deliveryTime: 0,
+                    make: '',
+                },
+                {
+                    vendorName: '',
+                    rate: 0,
+                    gstPercent: 0,
+                    paymentTerm: '',
+                    advancePercent: 0,
+                    whatsappNumber: '',
+                    emailId: '',
+                    quotationNo: '',
+                    quotationDate: '',
+                    deliveryTime: 0,
+                    make: '',
+                },
+            ],
+        },
+    });
+
+    const comparisonSheetAttachment = useAttachmentUpload(uploadComparisonSheet);
+
+    const { fields } = useFieldArray({
+        control: threePartyForm.control,
+        name: 'vendors',
+    });
+
+    // Watch for vendor selection to fetch payment term
+    const watchVendorRegular = regularForm.watch('vendorName');
+    const watchVendor0 = threePartyForm.watch('vendors.0.vendorName');
+    const watchVendor1 = threePartyForm.watch('vendors.1.vendorName');
+    const watchVendor2 = threePartyForm.watch('vendors.2.vendorName');
+
+    useEffect(() => {
+        if (watchVendorRegular) {
+            const quote = findQuoteByVendorName(watchVendorRegular);
+            if (quote && hasVendorRate(quote)) {
+                regularForm.setValue('quotationNo', quote.quatationNo || '');
+                regularForm.setValue(
+                    'quotationDate',
+                    new Date(quote.timestamp).toISOString().split('T')[0]
+                );
+                regularForm.setValue('rate', Number(quote.vendor_rate) || 0);
+            }
+            if (options?.vendors) {
+                const vendor = options.vendors.find(
+                    (v: any) =>
+                        normalizeVendorKey(v.vendorName) === normalizeVendorKey(watchVendorRegular)
+                );
+                if (vendor?.paymentTerm) {
+                    regularForm.setValue('paymentTerm', vendor.paymentTerm);
+                }
+            }
+        }
+    }, [watchVendorRegular, indentQuotes, options?.vendors, regularForm]);
+
+    useEffect(() => {
+        if (watchVendor0) {
+            const quote = findQuoteByVendorName(watchVendor0);
+            if (quote && hasVendorRate(quote)) {
+                threePartyForm.setValue('vendors.0.quotationNo', quote.quatationNo || '');
+                threePartyForm.setValue(
+                    'vendors.0.quotationDate',
+                    new Date(quote.timestamp).toISOString().split('T')[0]
+                );
+                threePartyForm.setValue('vendors.0.rate', Number(quote.vendor_rate) || 0);
+            }
+            if (options?.vendors) {
+                const vendor = options.vendors.find(
+                    (v: any) =>
+                        normalizeVendorKey(v.vendorName) === normalizeVendorKey(watchVendor0)
+                );
+                if (vendor?.paymentTerm) {
+                    threePartyForm.setValue('vendors.0.paymentTerm', vendor.paymentTerm);
+                }
+            }
+        }
+    }, [watchVendor0, indentQuotes, options?.vendors, threePartyForm]);
+
+    useEffect(() => {
+        if (watchVendor1) {
+            const quote = findQuoteByVendorName(watchVendor1);
+            if (quote && hasVendorRate(quote)) {
+                threePartyForm.setValue('vendors.1.quotationNo', quote.quatationNo || '');
+                threePartyForm.setValue(
+                    'vendors.1.quotationDate',
+                    new Date(quote.timestamp).toISOString().split('T')[0]
+                );
+                threePartyForm.setValue('vendors.1.rate', Number(quote.vendor_rate) || 0);
+            }
+            if (options?.vendors) {
+                const vendor = options.vendors.find(
+                    (v: any) =>
+                        normalizeVendorKey(v.vendorName) === normalizeVendorKey(watchVendor1)
+                );
+                if (vendor?.paymentTerm) {
+                    threePartyForm.setValue('vendors.1.paymentTerm', vendor.paymentTerm);
+                }
+            }
+        }
+    }, [watchVendor1, indentQuotes, options?.vendors, threePartyForm]);
+
+    useEffect(() => {
+        if (watchVendor2) {
+            const quote = findQuoteByVendorName(watchVendor2);
+            if (quote && hasVendorRate(quote)) {
+                threePartyForm.setValue('vendors.2.quotationNo', quote.quatationNo || '');
+                threePartyForm.setValue(
+                    'vendors.2.quotationDate',
+                    new Date(quote.timestamp).toISOString().split('T')[0]
+                );
+                threePartyForm.setValue('vendors.2.rate', Number(quote.vendor_rate) || 0);
+            }
+            if (options?.vendors) {
+                const vendor = options.vendors.find(
+                    (v: any) =>
+                        normalizeVendorKey(v.vendorName) === normalizeVendorKey(watchVendor2)
+                );
+                if (vendor?.paymentTerm) {
+                    threePartyForm.setValue('vendors.2.paymentTerm', vendor.paymentTerm);
+                }
+            }
+        }
+    }, [watchVendor2, indentQuotes, options?.vendors, threePartyForm]);
+
+    async function onSubmitThreeParty(values: any) {
+        try {
+            if (!selectedIndent?.id) {
+                toast.error('No indent selected');
+                return;
+            }
+
+            // Already uploaded directly to S3 at selection time.
+            const url = (values.comparisonSheet as unknown as string) || '';
+            const now = new Date().toISOString();
+
+            const processVendorData = (vendor: any) => {
+                const rateTypeText = 'Basic Rate';
+                let withTaxOrNot = 'No';
+                let taxValue = vendor.gstPercent || 0;
+
+                return {
+                    rateType: rateTypeText,
+                    rate: vendor.rate || 0,
+                    withTaxOrNot,
+                    taxValue,
+                    advancePercent: vendor.advancePercent?.toString() || '0',
+                    quotationNo: vendor.quotationNo || '',
+                    quotationDate: vendor.quotationDate || '',
+                    deliveryTime: vendor.deliveryTime?.toString() || '',
+                    make: vendor.make || '',
+                };
+            };
+
+            const vendor1Data = processVendorData(values.vendors[0]);
+            const vendor2Data = processVendorData(values.vendors[1]);
+            const vendor3Data = processVendorData(values.vendors[2]);
+
+            await updateVendorRateThreeParty(selectedIndent.id, {
+                actual2: now,
+                planned3: now, // Set planned3 for three party approval workflow
+
+                // Vendor 1
+                vendor_name1: values.vendors[0].vendorName || '',
+                select_rate_type1: vendor1Data.rateType,
+                rate1: vendor1Data.rate.toString(),
+                with_tax_or_not1: vendor1Data.withTaxOrNot,
+                tax_value1: vendor1Data.taxValue.toString(),
+                payment_term1: values.vendors[0].paymentTerm || '',
+                advance_percent1: vendor1Data.advancePercent,
+                whatsapp_number1: values.vendors[0].whatsappNumber || '',
+                email_id1: values.vendors[0].emailId || '',
+                quotation_no1: vendor1Data.quotationNo,
+                quotation_date1: vendor1Data.quotationDate,
+                delivery_time1: vendor1Data.deliveryTime,
+                make1: vendor1Data.make,
+
+                // Vendor 2
+                vendor_name2: values.vendors[1].vendorName || '',
+                select_rate_type2: vendor2Data.rateType,
+                rate2: vendor2Data.rate.toString(),
+                with_tax_or_not2: vendor2Data.withTaxOrNot,
+                tax_value2: vendor2Data.taxValue.toString(),
+                payment_term2: values.vendors[1].paymentTerm || '',
+                advance_percent2: vendor2Data.advancePercent,
+                whatsapp_number2: values.vendors[1].whatsappNumber || '',
+                email_id2: values.vendors[1].emailId || '',
+                quotation_no2: vendor2Data.quotationNo,
+                quotation_date2: vendor2Data.quotationDate,
+                delivery_time2: vendor2Data.deliveryTime,
+                make2: vendor2Data.make,
+
+                // Vendor 3
+                vendor_name3: values.vendors[2].vendorName || '',
+                select_rate_type3: vendor3Data.rateType,
+                rate3: vendor3Data.rate.toString(),
+                with_tax_or_not3: vendor3Data.withTaxOrNot,
+                tax_value3: vendor3Data.taxValue.toString(),
+                payment_term3: values.vendors[2].paymentTerm || '',
+                advance_percent3: vendor3Data.advancePercent,
+                whatsapp_number3: values.vendors[2].whatsappNumber || '',
+                email_id3: values.vendors[2].emailId || '',
+                quotation_no3: vendor3Data.quotationNo,
+                quotation_date3: vendor3Data.quotationDate,
+                delivery_time3: vendor3Data.deliveryTime,
+                make3: vendor3Data.make,
+
+                comparison_sheet: url,
+                product_code: values.productCode || '',
+                vendor_type: computedVendorType,
+            });
+
+            toast.success(`Updated vendors of ${selectedIndent.indentNo}`);
+            setOpenDialog(false);
+            threePartyForm.reset();
+            comparisonSheetAttachment.reset({ committed: true });
+            setSelectedIndent(null);
+            await loadPendingVendorUpdates();
+            await loadCompletedVendorUpdates();
+        } catch (error) {
+            console.error('Error updating vendors:', error);
+            toast.error('Failed to update vendors');
+        }
+    }
+
+    function onError(e: any) {
+        console.error(e);
+        toast.error('Please fill all required fields');
+    }
+
+    const handleFillDummyDataRegular = (e?: React.MouseEvent) => {
+        e?.preventDefault?.();
+
+        // 1. Vendor Name from available dropdown options
+        const availableVendors = getSortedVendorNames('');
+        const chosenVendor = availableVendors.length > 0 
+            ? availableVendors[0] 
+            : (options?.vendors?.[0]?.vendorName || options?.vendorNames?.[0] || 'Default Vendor');
+
+        // Check if chosen vendor has existing quote rate
+        const quote = findQuoteByVendorName(chosenVendor);
+        const autoRate = quote && hasVendorRate(quote) ? Number(quote.vendor_rate) : 1500;
+
+        // 2. GST % dropdown options: [0, 5, 12, 18, 28]
+        const gstVal = 18;
+
+        // 3. Payment Term dropdown options
+        const defaultTerms = [
+            'Against Advance Payment',
+            'Against PI (Proforma Invoice)',
+            'Within 15 Days of Delivery',
+            'Within 30 Days of Delivery',
+            'Partly Advance/ Partly PI'
+        ];
+        const paymentTermOptions = (options?.paymentTerms && options.paymentTerms.length > 0)
+            ? options.paymentTerms
+            : defaultTerms;
+        const chosenPaymentTerm = paymentTermOptions[0] || 'Within 30 Days of Delivery';
+
+        const todayStr = new Date().toISOString().split('T')[0];
+        const randomEnq = `ENQ-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        regularForm.reset({
+            vendorName: chosenVendor,
+            quotationNo: randomEnq,
+            quotationDate: todayStr,
+            rate: autoRate,
+            gstPercent: gstVal,
+            paymentTerm: chosenPaymentTerm,
+            advancePercent: chosenPaymentTerm === 'Partly Advance/ Partly PI' ? 50 : 0,
+            deliveryTime: 7,
+            make: 'Tata / Jindal',
+        });
+
+        toast.success('Test entries filled with valid data!');
+    };
+
+    const handleFillDummyDataThreeParty = (e?: React.MouseEvent) => {
+        e?.preventDefault?.();
+
+        const availableVendors = getSortedVendorNames('');
+        const v1Name = availableVendors[0] || options?.vendors?.[0]?.vendorName || options?.vendorNames?.[0] || 'Vendor 1';
+        const v2Name = availableVendors[1] || availableVendors[0] || options?.vendors?.[1]?.vendorName || options?.vendorNames?.[1] || 'Vendor 2';
+        const v3Name = availableVendors[2] || availableVendors[0] || options?.vendors?.[2]?.vendorName || options?.vendorNames?.[2] || 'Vendor 3';
+
+        const defaultTerms = [
+            'Against Advance Payment',
+            'Against PI (Proforma Invoice)',
+            'Within 15 Days of Delivery',
+            'Within 30 Days of Delivery',
+            'Partly Advance/ Partly PI'
+        ];
+        const paymentTermOptions = (options?.paymentTerms && options.paymentTerms.length > 0)
+            ? options.paymentTerms
+            : defaultTerms;
+
+        const term1 = paymentTermOptions[0] || 'Within 30 Days of Delivery';
+        const term2 = paymentTermOptions[1 % paymentTermOptions.length] || 'Against Advance Payment';
+        const term3 = paymentTermOptions[2 % paymentTermOptions.length] || 'Against PI (Proforma Invoice)';
+
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        // Quotes rates if available
+        const q1 = findQuoteByVendorName(v1Name);
+        const r1 = q1 && hasVendorRate(q1) ? Number(q1.vendor_rate) : 1200;
+
+        const q2 = findQuoteByVendorName(v2Name);
+        const r2 = q2 && hasVendorRate(q2) ? Number(q2.vendor_rate) : 1250;
+
+        const q3 = findQuoteByVendorName(v3Name);
+        const r3 = q3 && hasVendorRate(q3) ? Number(q3.vendor_rate) : 1300;
+
+        threePartyForm.reset({
+            productCode: (selectedIndent as any)?.productCode || 'PRD-001',
+            comparisonSheet: threePartyForm.getValues('comparisonSheet'),
+            vendors: [
+                {
+                    vendorName: v1Name,
+                    quotationNo: 'ENQ-TP-01',
+                    quotationDate: todayStr,
+                    rate: r1,
+                    gstPercent: 18,
+                    paymentTerm: term1,
+                    advancePercent: term1 === 'Partly Advance/ Partly PI' ? 50 : 0,
+                    whatsappNumber: '9876543210',
+                    emailId: 'vendor1@gmail.com',
+                    deliveryTime: 5,
+                    make: 'Tata Steel',
+                },
+                {
+                    vendorName: v2Name,
+                    quotationNo: 'ENQ-TP-02',
+                    quotationDate: todayStr,
+                    rate: r2,
+                    gstPercent: 18,
+                    paymentTerm: term2,
+                    advancePercent: term2 === 'Partly Advance/ Partly PI' ? 50 : 0,
+                    whatsappNumber: '9876543211',
+                    emailId: 'vendor2@gmail.com',
+                    deliveryTime: 7,
+                    make: 'Jindal Steel',
+                },
+                {
+                    vendorName: v3Name,
+                    quotationNo: 'ENQ-TP-03',
+                    quotationDate: todayStr,
+                    rate: r3,
+                    gstPercent: 18,
+                    paymentTerm: term3,
+                    advancePercent: term3 === 'Partly Advance/ Partly PI' ? 50 : 0,
+                    whatsappNumber: '9876543212',
+                    emailId: 'vendor3@gmail.com',
+                    deliveryTime: 10,
+                    make: 'Sail Steel',
+                },
+            ],
+        });
+
+        toast.success('Test entries filled with valid data!');
+    };
+
+    return (
+        <div>
+            <Dialog
+                open={openDialog}
+                onOpenChange={(open) => {
+                    setOpenDialog(open);
+                    if (!open) {
+                        setSelectedIndent(null);
+                        comparisonSheetAttachment.reset();
+                    }
+                }}
+            >
+                <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+                    <TabsContent value="pending">
+                        {/* Compact Centered Filters for Pending Tab */}
+                        <div className="flex flex-col sm:flex-row gap-3 mb-4 items-center justify-center p-4 bg-muted/30 rounded-lg border">
+                            {/* Date Filter */}
+                            <div className="w-full sm:w-auto">
+                                <div className="flex gap-2 items-center">
+                                    <Input
+                                        type="date"
+                                        value={selectedDate}
+                                        onChange={(e) => setSelectedDate(e.target.value)}
+                                        className="w-32 sm:w-36"
+                                        placeholder="Select Date"
+                                    />
+                                    {selectedDate && (
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => setSelectedDate('')}
+                                            className="h-9 w-9"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* UOM Filter */}
+                            <div className="w-full sm:w-auto">
+                                <div className="flex gap-2 items-center">
+                                    <Select value={selectedUOM} onValueChange={setSelectedUOM}>
+                                        <SelectTrigger className="w-32 sm:w-36">
+                                            <SelectValue placeholder="Select UOM" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="__all__">All UOMs</SelectItem>
+                                            {uniqueUOMs.map((uom) => (
+                                                <SelectItem key={uom} value={uom}>
+                                                    {uom}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    {selectedUOM && selectedUOM !== '__all__' && (
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => setSelectedUOM('')}
+                                            className="h-9 w-9"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Search Filter */}
+                            <div className="w-full sm:w-auto flex-1 max-w-md">
+                                <div className="flex gap-2 items-center">
+                                    <Input
+                                        type="text"
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        placeholder="Search..."
+                                        className="flex-1"
+                                    />
+                                    {searchQuery && (
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => setSearchQuery('')}
+                                            className="h-9 w-9"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Clear All Button */}
+                            {(selectedDate || selectedUOM || searchQuery) && (
+                                <Button
+                                    variant="outline"
+                                    onClick={clearAllFilters}
+                                    className="w-full sm:w-auto"
+                                >
+                                    Clear All
+                                </Button>
+                            )}
+                        </div>
+
+                        <DataTable
+                            data={filteredTableData}
+                            columns={columns}
+                            searchFields={[]}
+                            dataLoading={dataLoading}
+                            beforeSearch={
+                                <TabButtons
+                                    activeTab={activeTab}
+                                    onTabChange={setActiveTab}
+                                    pendingCount={tableData.length}
+                                    historyCount={historyData.length}
+                                />
+                            }
+                        />
+                    </TabsContent>
+
+                    <TabsContent value="history">
+                        {/* Compact Centered Filters for History Tab */}
+                        <div className="flex flex-col sm:flex-row gap-3 mb-4 items-center justify-center p-4 bg-muted/30 rounded-lg border">
+                            {/* Date Filter */}
+                            <div className="w-full sm:w-auto">
+                                <div className="flex gap-2 items-center">
+                                    <Input
+                                        type="date"
+                                        value={selectedHistoryDate}
+                                        onChange={(e) => setSelectedHistoryDate(e.target.value)}
+                                        className="w-32 sm:w-36"
+                                        placeholder="Select Date"
+                                    />
+                                    {selectedHistoryDate && (
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => setSelectedHistoryDate('')}
+                                            className="h-9 w-9"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* UOM Filter */}
+                            <div className="w-full sm:w-auto">
+                                <div className="flex gap-2 items-center">
+                                    <Select
+                                        value={selectedHistoryUOM}
+                                        onValueChange={setSelectedHistoryUOM}
+                                    >
+                                        <SelectTrigger className="w-32 sm:w-36">
+                                            <SelectValue placeholder="Select UOM" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="__all__">All UOMs</SelectItem>
+                                            {uniqueHistoryUOMs.map((uom) => (
+                                                <SelectItem key={uom} value={uom}>
+                                                    {uom}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    {selectedHistoryUOM && selectedHistoryUOM !== '__all__' && (
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => setSelectedHistoryUOM('')}
+                                            className="h-9 w-9"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Search Filter */}
+                            <div className="w-full sm:w-auto flex-1 max-w-md">
+                                <div className="flex gap-2 items-center">
+                                    <Input
+                                        type="text"
+                                        value={historySearchQuery}
+                                        onChange={(e) => setHistorySearchQuery(e.target.value)}
+                                        placeholder="Search..."
+                                        className="flex-1"
+                                    />
+                                    {historySearchQuery && (
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            onClick={() => setHistorySearchQuery('')}
+                                            className="h-9 w-9"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Clear All Button */}
+                            {(selectedHistoryDate || selectedHistoryUOM || historySearchQuery) && (
+                                <Button
+                                    variant="outline"
+                                    onClick={clearAllHistoryFilters}
+                                    className="w-full sm:w-auto"
+                                >
+                                    Clear All
+                                </Button>
+                            )}
+                        </div>
+
+                        <DataTable
+                            data={filteredHistoryData}
+                            columns={historyColumns}
+                            searchFields={[]}
+                            dataLoading={dataLoading}
+                            beforeSearch={
+                                <TabButtons
+                                    activeTab={activeTab}
+                                    onTabChange={setActiveTab}
+                                    pendingCount={tableData.length}
+                                    historyCount={historyData.length}
+                                />
+                            }
+                        />
+                    </TabsContent>
+                </Tabs>
+
+                {/* Step 1 and Regular Vendor Step 2 */}
+                {selectedIndent && !(dialogStep === 2 && computedVendorType === 'Three Party') && (
+                    <DialogContent
+                        className={`${dialogStep === 2 ? 'max-w-5xl' : 'max-w-2xl'} max-h-[95vh] overflow-y-auto`}
+                    >
+                        {dialogStep === 1 ? (
+                            <div className="grid gap-5">
+                                <DialogHeader className="grid gap-2">
+                                    <DialogTitle>Step 1: Determine Vendor Type</DialogTitle>
+                                    <DialogDescription>
+                                        <span className="font-medium">
+                                            {selectedIndent?.indentNo}
+                                        </span>
+                                    </DialogDescription>
+                                </DialogHeader>
+                                <div className="grid gap-4">
+                                    <div className="grid gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                                        <Label>Vendor Type Selection</Label>
+                                        <Select
+                                            value={computedVendorType}
+                                            onValueChange={(val: 'Regular' | 'Three Party') =>
+                                                setComputedVendorType(val)
+                                            }
+                                        >
+                                            <SelectTrigger className="w-full">
+                                                <SelectValue placeholder="Select Vendor Type" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="Regular">
+                                                    Regular Vendor
+                                                </SelectItem>
+                                                <SelectItem value="Three Party">
+                                                    Three Party (3 Party)
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <p className="text-[10px] text-muted-foreground font-medium italic">
+                                            * Please select vendor type manually.
+                                        </p>
+                                    </div>
+                                </div>
+                                <DialogFooter>
+                                    <DialogClose asChild>
+                                        <Button variant="outline">Close</Button>
+                                    </DialogClose>
+                                    <Button onClick={() => setDialogStep(2)}>Next</Button>
+                                </DialogFooter>
+                            </div>
+                        ) : computedVendorType === 'Regular' ? (
+                            <Form {...regularForm}>
+                                <form
+                                    onSubmit={regularForm.handleSubmit(onSubmitRegular, onError)}
+                                    className="grid gap-5"
+                                >
+                                    <DialogHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
+                                        <div>
+                                            <DialogTitle>Step 2: Update Regular Vendor</DialogTitle>
+                                            <DialogDescription>
+                                                Update vendor for indent{' '}
+                                                <span className="font-medium">
+                                                    {selectedIndent?.indentNo}
+                                                </span>
+                                            </DialogDescription>
+                                        </div>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={handleFillDummyDataRegular}
+                                            className="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-xs cursor-pointer mr-6"
+                                            title="Fill all fields with valid dummy data"
+                                        >
+                                            <Sparkles size={14} className="text-amber-600" />
+                                            <span>Test Entries</span>
+                                        </Button>
+                                    </DialogHeader>
+                                    {/* Copy existing form fields... */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div className="md:col-span-2">
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="vendorName"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Vendor Name</FormLabel>
+                                                        <Select
+                                                            onValueChange={field.onChange}
+                                                            value={field.value}
+                                                        >
+                                                            <FormControl>
+                                                                <SelectTrigger>
+                                                                    <SelectValue placeholder="Select vendor" />
+                                                                </SelectTrigger>
+                                                            </FormControl>
+                                                            <SelectContent>
+                                                                <div className="flex items-center border-b px-3 pb-3">
+                                                                    <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                                                                    <input
+                                                                        placeholder="Search vendors..."
+                                                                        value={searchTermVendor}
+                                                                        onChange={(e) =>
+                                                                            setSearchTermVendor(
+                                                                                e.target.value
+                                                                            )
+                                                                        }
+                                                                        onKeyDown={(e) =>
+                                                                            e.stopPropagation()
+                                                                        }
+                                                                        className="flex h-10 w-full rounded-md border-0 bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground"
+                                                                    />
+                                                                </div>
+                                                                {getSortedVendorNames(
+                                                                    searchTermVendor
+                                                                ).map((v, i) => {
+                                                                    const quote =
+                                                                        findQuoteByVendorName(v);
+                                                                    return (
+                                                                        <SelectItem
+                                                                            key={i}
+                                                                            value={v}
+                                                                        >
+                                                                            <div className="flex justify-between items-center w-full min-w-[200px] gap-2">
+                                                                                <span className="truncate max-w-[150px]">
+                                                                                    {v}
+                                                                                </span>
+                                                                                {quote &&
+                                                                                    hasVendorRate(
+                                                                                        quote
+                                                                                    ) && (
+                                                                                        <span className="text-xs font-bold px-1.5 py-0.5 bg-primary/10 text-primary rounded border border-primary/20 shrink-0">
+                                                                                            ₹
+                                                                                            {
+                                                                                                quote.vendor_rate
+                                                                                            }
+                                                                                        </span>
+                                                                                    )}
+                                                                            </div>
+                                                                        </SelectItem>
+                                                                    );
+                                                                })}
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-4 md:col-span-2 border-t pt-4">
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="quotationNo"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Enquiry No</FormLabel>
+                                                        <FormControl>
+                                                            <Input
+                                                                {...field}
+                                                                placeholder="Enquiry no."
+                                                            />
+                                                        </FormControl>
+                                                    </FormItem>
+                                                )}
+                                            />
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="quotationDate"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Enquiry Date</FormLabel>
+                                                        <FormControl>
+                                                            <Input type="date" {...field} />
+                                                        </FormControl>
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4 md:col-span-2">
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="rate"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Basic Rate</FormLabel>
+                                                        <FormControl>
+                                                            <Input type="number" {...field} />
+                                                        </FormControl>
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="gstPercent"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>GST %</FormLabel>
+                                                        <Select
+                                                            onValueChange={(val) =>
+                                                                field.onChange(Number(val))
+                                                            }
+                                                            value={field.value?.toString()}
+                                                        >
+                                                            <FormControl>
+                                                                <SelectTrigger>
+                                                                    <SelectValue placeholder="Select GST %" />
+                                                                </SelectTrigger>
+                                                            </FormControl>
+                                                            <SelectContent>
+                                                                <SelectItem value="0">
+                                                                    0%
+                                                                </SelectItem>
+                                                                <SelectItem value="5">
+                                                                    5%
+                                                                </SelectItem>
+                                                                <SelectItem value="12">
+                                                                    12%
+                                                                </SelectItem>
+                                                                <SelectItem value="18">
+                                                                    18%
+                                                                </SelectItem>
+                                                                <SelectItem value="28">
+                                                                    28%
+                                                                </SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+
+                                        <div
+                                            className={`grid gap-4 md:col-span-2 ${regularForm.watch('paymentTerm') === 'Partly Advance/ Partly PI' ? 'grid-cols-2' : 'grid-cols-1'}`}
+                                        >
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="paymentTerm"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Payment Term</FormLabel>
+                                                        <Select
+                                                            onValueChange={field.onChange}
+                                                            value={field.value}
+                                                        >
+                                                            <FormControl>
+                                                                <SelectTrigger>
+                                                                    <SelectValue placeholder="Select payment term" />
+                                                                </SelectTrigger>
+                                                            </FormControl>
+                                                            <SelectContent>
+                                                                {Array.from(new Set([...(options?.paymentTerms || []), field.value].filter((term): term is string => Boolean(term)))).map(
+                                                                    (term, i) => (
+                                                                        <SelectItem
+                                                                            key={`reg-pt-${term}-${i}`}
+                                                                            value={term}
+                                                                        >
+                                                                            {term}
+                                                                        </SelectItem>
+                                                                    )
+                                                                )}
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            {regularForm.watch('paymentTerm') ===
+                                                'Partly Advance/ Partly PI' && (
+                                                <FormField
+                                                    control={regularForm.control}
+                                                    name="advancePercent"
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel>Advance %</FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    type="number"
+                                                                    placeholder="Enter % e.g. 50"
+                                                                    {...field}
+                                                                    min={0}
+                                                                    max={100}
+                                                                />
+                                                            </FormControl>
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                            )}
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4 md:col-span-2 border-t pt-4">
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="deliveryTime"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Delivery Time (Days)</FormLabel>
+                                                        <FormControl>
+                                                            <Input
+                                                                type="number"
+                                                                placeholder="e.g. 4"
+                                                                {...field}
+                                                            />
+                                                        </FormControl>
+                                                    </FormItem>
+                                                )}
+                                            />
+                                            <FormField
+                                                control={regularForm.control}
+                                                name="make"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>Make</FormLabel>
+                                                        <FormControl>
+                                                            <Input
+                                                                placeholder="Enter make"
+                                                                {...field}
+                                                            />
+                                                        </FormControl>
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+                                    </div>
+                                    <DialogFooter className="flex items-center justify-between w-full sm:justify-between">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={handleFillDummyDataRegular}
+                                            className="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-xs cursor-pointer"
+                                            title="Fill all fields with valid dummy data"
+                                        >
+                                            <Sparkles size={14} className="text-amber-600" />
+                                            <span>Test Entries</span>
+                                        </Button>
+                                        <div className="flex items-center gap-2">
+                                            <Button variant="outline" onClick={() => setDialogStep(1)}>
+                                                Back
+                                            </Button>
+                                            <Button
+                                                type="submit"
+                                                disabled={regularForm.formState.isSubmitting}
+                                            >
+                                                {regularForm.formState.isSubmitting && (
+                                                    <Loader
+                                                        size={20}
+                                                        color="white"
+                                                        aria-label="Loading Spinner"
+                                                    />
+                                                )}
+                                                Update
+                                            </Button>
+                                        </div>
+                                    </DialogFooter>
+                                </form>
+                            </Form>
+                        ) : null}
+                    </DialogContent>
+                )}
+
+                {/* Unique Three Party Vendor Step 2 */}
+                {selectedIndent && dialogStep === 2 && computedVendorType === 'Three Party' && (
+                    <DialogContent
+                        className="max-h-[95vh] overflow-y-auto"
+                        style={{ maxWidth: '98vw', width: '98vw' }}
+                    >
+                        <Form {...threePartyForm}>
+                            <form
+                                onSubmit={threePartyForm.handleSubmit(onSubmitThreeParty, onError)}
+                                className="grid gap-6"
+                            >
+                                <DialogHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
+                                    <div>
+                                        <DialogTitle>Step 2: Update Three Party Vendors</DialogTitle>
+                                        <DialogDescription>
+                                            Update vendors for indent{' '}
+                                            <span className="font-medium">
+                                                {selectedIndent.indentNo}
+                                            </span>
+                                        </DialogDescription>
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleFillDummyDataThreeParty}
+                                        className="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-xs cursor-pointer mr-6"
+                                        title="Fill all fields with valid dummy data"
+                                    >
+                                        <Sparkles size={14} className="text-amber-600" />
+                                        <span>Test Entries</span>
+                                    </Button>
+                                </DialogHeader>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-4">
+                                    <FormField
+                                        control={threePartyForm.control}
+                                        name="productCode"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Product Code (Optional)</FormLabel>
+                                                <FormControl>
+                                                    <Input
+                                                        {...field}
+                                                        placeholder="Enter product code"
+                                                    />
+                                                </FormControl>
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={threePartyForm.control}
+                                        name="comparisonSheet"
+                                        render={() => (
+                                            <FormItem>
+                                                <FormLabel>Comparison Sheet (Optional)</FormLabel>
+                                                <FormControl>
+                                                    <AttachmentUploadField
+                                                        id="vendor-comparison-sheet"
+                                                        status={comparisonSheetAttachment.status}
+                                                        progress={comparisonSheetAttachment.progress}
+                                                        fileName={comparisonSheetAttachment.fileName}
+                                                        error={comparisonSheetAttachment.error}
+                                                        onSelect={async (file) => {
+                                                            const url = await comparisonSheetAttachment.select(file);
+                                                            threePartyForm.setValue('comparisonSheet', url ?? undefined, {
+                                                                shouldValidate: true,
+                                                            });
+                                                        }}
+                                                        onRemove={() => {
+                                                            comparisonSheetAttachment.remove();
+                                                            threePartyForm.setValue('comparisonSheet', undefined, {
+                                                                shouldValidate: true,
+                                                            });
+                                                        }}
+                                                    />
+                                                </FormControl>
+                                            </FormItem>
+                                        )}
+                                    />
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                    {fields.map((field, index) => (
+                                        <div
+                                            key={field.id}
+                                            className="border p-4 rounded-xl shadow-sm space-y-4"
+                                        >
+                                            <h3 className="font-bold border-b pb-2 text-blue-600">
+                                                Vendor {index + 1} {index === 2 && '(Optional)'}
+                                            </h3>
+
+                                            <div className="grid gap-4">
+                                                <FormField
+                                                    control={threePartyForm.control}
+                                                    name={`vendors.${index}.vendorName`}
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel>Vendor Name</FormLabel>
+                                                            <Select
+                                                                onValueChange={field.onChange}
+                                                                defaultValue={field.value}
+                                                            >
+                                                                <FormControl>
+                                                                    <SelectTrigger>
+                                                                        <SelectValue placeholder="Select vendor" />
+                                                                    </SelectTrigger>
+                                                                </FormControl>
+                                                                <SelectContent>
+                                                                    <div className="flex items-center border-b px-3 pb-2 sticky top-0 bg-background z-10">
+                                                                        <Search className="mr-2 h-4 w-4 opacity-50" />
+                                                                        <input
+                                                                            placeholder="Search vendors..."
+                                                                            value={searchTermVendor}
+                                                                            onChange={(e) =>
+                                                                                setSearchTermVendor(
+                                                                                    e.target.value
+                                                                                )
+                                                                            }
+                                                                            className="h-10 w-full border-0 bg-transparent text-sm outline-none"
+                                                                        />
+                                                                    </div>
+                                                                    {getSortedVendorNames(
+                                                                        searchTermVendor
+                                                                    ).map((v, i) => {
+                                                                        const quote =
+                                                                            findQuoteByVendorName(
+                                                                                v
+                                                                            );
+                                                                        return (
+                                                                            <SelectItem
+                                                                                key={i}
+                                                                                value={v}
+                                                                            >
+                                                                                <div className="flex justify-between items-center w-full min-w-[200px] gap-2">
+                                                                                    <span className="truncate max-w-[150px]">
+                                                                                        {v}
+                                                                                    </span>
+                                                                                    {quote &&
+                                                                                        hasVendorRate(
+                                                                                            quote
+                                                                                        ) && (
+                                                                                            <span className="text-xs font-bold px-1.5 py-0.5 bg-primary/10 text-primary rounded border border-primary/20 shrink-0">
+                                                                                                ₹
+                                                                                                {
+                                                                                                    quote.vendor_rate
+                                                                                                }
+                                                                                            </span>
+                                                                                        )}
+                                                                                </div>
+                                                                            </SelectItem>
+                                                                        );
+                                                                    })}
+                                                                </SelectContent>
+                                                            </Select>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+
+                                                <div className="grid grid-cols-1 gap-4">
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.quotationNo`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Enquiry No</FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        {...field}
+                                                                        placeholder="Quotation no."
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.quotationDate`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Enquiry Date</FormLabel>
+                                                                <FormControl>
+                                                                    <Input type="date" {...field} />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.rate`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Basic Rate</FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        type="number"
+                                                                        {...field}
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.gstPercent`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>GST %</FormLabel>
+                                                                <Select
+                                                                    onValueChange={(val) =>
+                                                                        field.onChange(Number(val))
+                                                                    }
+                                                                    value={field.value?.toString()}
+                                                                >
+                                                                    <FormControl>
+                                                                        <SelectTrigger>
+                                                                            <SelectValue placeholder="Select GST %" />
+                                                                        </SelectTrigger>
+                                                                    </FormControl>
+                                                                    <SelectContent>
+                                                                        <SelectItem value="0">
+                                                                            0%
+                                                                        </SelectItem>
+                                                                        <SelectItem value="5">
+                                                                            5%
+                                                                        </SelectItem>
+                                                                        <SelectItem value="12">
+                                                                            12%
+                                                                        </SelectItem>
+                                                                        <SelectItem value="18">
+                                                                            18%
+                                                                        </SelectItem>
+                                                                        <SelectItem value="28">
+                                                                            28%
+                                                                        </SelectItem>
+                                                                    </SelectContent>
+                                                                </Select>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                </div>
+
+                                                <FormField
+                                                    control={threePartyForm.control}
+                                                    name={`vendors.${index}.paymentTerm`}
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel>Payment Term</FormLabel>
+                                                            <Select
+                                                                onValueChange={field.onChange}
+                                                                value={field.value}
+                                                            >
+                                                                <FormControl>
+                                                                    <SelectTrigger>
+                                                                        <SelectValue placeholder="Select payment term" />
+                                                                    </SelectTrigger>
+                                                                </FormControl>
+                                                                <SelectContent>
+                                                                    {Array.from(new Set([...(options?.paymentTerms || []), field.value].filter((term): term is string => Boolean(term)))).map(
+                                                                        (term, i) => (
+                                                                            <SelectItem
+                                                                                key={`tp-pt-${index}-${term}-${i}`}
+                                                                                value={term}
+                                                                            >
+                                                                                {term}
+                                                                            </SelectItem>
+                                                                        )
+                                                                    )}
+                                                                </SelectContent>
+                                                            </Select>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+
+                                                {threePartyForm.watch(
+                                                    `vendors.${index}.paymentTerm`
+                                                ) === 'Partly Advance/ Partly PI' && (
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.advancePercent`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Advance %</FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        type="number"
+                                                                        placeholder="Enter % e.g. 50"
+                                                                        {...field}
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                )}
+
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.whatsappNumber`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>WhatsApp</FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        {...field}
+                                                                        placeholder="WhatsApp no."
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.emailId`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Email ID</FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        type="email"
+                                                                        {...field}
+                                                                        placeholder="Email"
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.deliveryTime`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>
+                                                                    Delivery Time (Days)
+                                                                </FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        type="number"
+                                                                        placeholder="Days"
+                                                                        {...field}
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.make`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Make</FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        {...field}
+                                                                        placeholder="Make"
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <DialogFooter className="flex items-center justify-between w-full sm:justify-between">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleFillDummyDataThreeParty}
+                                        className="bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-xs cursor-pointer"
+                                        title="Fill all fields with valid dummy data"
+                                    >
+                                        <Sparkles size={14} className="text-amber-600" />
+                                        <span>Test Entries</span>
+                                    </Button>
+                                    <div className="flex items-center gap-2">
+                                        <Button variant="outline" onClick={() => setDialogStep(1)}>
+                                            Back
+                                        </Button>
+                                        <Button
+                                            type="submit"
+                                            disabled={
+                                                threePartyForm.formState.isSubmitting ||
+                                                comparisonSheetAttachment.status === 'uploading'
+                                            }
+                                        >
+                                            {threePartyForm.formState.isSubmitting && (
+                                                <Loader
+                                                    size={20}
+                                                    color="white"
+                                                    aria-label="Loading Spinner"
+                                                />
+                                            )}
+                                            Update
+                                        </Button>
+                                    </div>
+                                </DialogFooter>
+                            </form>
+                        </Form>
+                    </DialogContent>
+                )}
+            </Dialog>
+
+
+            <StageDeleteDialog
+                open={!!deleteTarget}
+                onOpenChange={(v) => !v && setDeleteTarget(null)}
+                stageName="Vendor Rate Update"
+                isPermanentDelete={false}
+                indentNumber={deleteTarget?.indentNo}
+                productName={deleteTarget?.product}
+                onConfirm={async () => {
+                    if (!deleteTarget) return;
+                    const targetId = deleteTarget.id;
+                    const indentNum = deleteTarget.indentNo;
+                    await resetIndentStage(targetId, 'vendor_rate');
+                    toast.success(`Vendor rate details for Indent ${indentNum} deleted and reset`);
+                    setDeleteTarget(null);
+                    setHistoryData(prev => prev.filter(r => r.id !== targetId));
+                    setFilteredHistoryData(prev => prev.filter(r => r.id !== targetId));
+                    await loadPendingVendorUpdates();
+                    await loadCompletedVendorUpdates();
+                }}
+            />
+        </div>
+    );
+};
+
