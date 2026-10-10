@@ -4,6 +4,7 @@ import { UploadCloud, Check, FileSpreadsheet, Sparkles, FileText, CalendarClock,
 import { generateId, formatDate, fileToBase64 } from '../../utils/helpers';
 import { saveMinor, saveDesignForProject, getSentPOForProject, getMobilizationForProject, getExternalPurchaseOrders, saveScheduleForMinor } from '../../utils/storageManager';
 import { parsePdfTableFile } from '../../utils/pdfTableParser';
+import { saveFileToIndexedDB, getFileFromIndexedDB, setMemoryFile, getMemoryFile } from '../../utils/fileStorage';
 import ModalForm from '../../components/ModalForm';
 import { DESIGN_COLUMNS, parseDesignFile } from './UploadDesign';
 
@@ -30,6 +31,7 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
   const [scheduleFileName, setScheduleFileName] = useState('');
   const [scheduleRows, setScheduleRows] = useState([]);
   const [scheduleHeaders, setScheduleHeaders] = useState([]);
+  const [scheduleFileId, setScheduleFileId] = useState('');
   const [parsingSchedule, setParsingSchedule] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -105,6 +107,7 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
     setFileName('');
     setRows([]);
     setScheduleFile('');
+    setScheduleFileId('');
     setScheduleFileName('');
     setScheduleRows([]);
     setScheduleHeaders([]);
@@ -158,8 +161,14 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
     const toastId = toast.loading('Reading & parsing PDF schedule table data...');
 
     try {
+      const fileId = `sched_${Date.now()}`;
+      const blobUrl = URL.createObjectURL(file);
+      setMemoryFile(fileId, blobUrl);
+      saveFileToIndexedDB(fileId, file);
+
       const parsed = await parsePdfTableFile(file);
-      setScheduleFile(parsed.fileUrl);
+      setScheduleFile(blobUrl);
+      setScheduleFileId(fileId);
       setScheduleFileName(parsed.fileName);
       setScheduleRows(parsed.rows || []);
       setScheduleHeaders(parsed.headers || []);
@@ -172,8 +181,13 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
     } catch (err) {
       console.error('Failed to parse PDF schedule:', err);
       try {
-        const fileUrl = await fileToBase64(file);
-        setScheduleFile(fileUrl);
+        const fileId = `sched_${Date.now()}`;
+        const blobUrl = URL.createObjectURL(file);
+        setMemoryFile(fileId, blobUrl);
+        saveFileToIndexedDB(fileId, file);
+
+        setScheduleFile(blobUrl);
+        setScheduleFileId(fileId);
         setScheduleFileName(file.name);
         setScheduleRows([]);
         setScheduleHeaders([]);
@@ -188,10 +202,42 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
 
   const handleRemoveSchedule = () => {
     setScheduleFile('');
+    setScheduleFileId('');
     setScheduleFileName('');
     setScheduleRows([]);
     setScheduleHeaders([]);
     toast.success('Schedule removed');
+  };
+
+  const handleViewSchedulePdf = async (fileUrlOrId, fileName, e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    if (!fileUrlOrId) return;
+
+    if (fileUrlOrId.startsWith('blob:') || fileUrlOrId.startsWith('data:')) {
+      window.open(fileUrlOrId, '_blank');
+      return;
+    }
+
+    const id = fileUrlOrId.startsWith('idb:') ? fileUrlOrId.replace('idb:', '') : fileUrlOrId;
+    const mem = getMemoryFile(id);
+    if (mem) {
+      window.open(mem, '_blank');
+      return;
+    }
+
+    const toastId = toast.loading('Opening schedule document...');
+    try {
+      const data = await getFileFromIndexedDB(id);
+      if (data) {
+        toast.dismiss(toastId);
+        window.open(data, '_blank');
+      } else {
+        toast.error('Schedule document not found', { id: toastId });
+      }
+    } catch {
+      toast.error('Could not load document', { id: toastId });
+    }
   };
 
   const handleSubmit = (e) => {
@@ -209,6 +255,7 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
 
     setLoading(true);
 
+    const fileId = scheduleFileId || `sched_${Date.now()}`;
     const minor = {
       id: generateId(),
       projectNo: project.serialNo,
@@ -217,7 +264,8 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
       poNumber: selectedPoInfo?.poNumber || '',
       poAmount: selectedPoInfo?.poAmount || '',
       workingUnit: selectedPoInfo?.workingUnit || '',
-      scheduleFile: scheduleFile || '',
+      scheduleFileId: fileId,
+      scheduleFile: scheduleFile && scheduleFile.length > 5000 ? `idb:${fileId}` : (scheduleFile || ''),
       scheduleFileName: scheduleFileName || '',
       scheduleRows: scheduleRows || [],
       scheduleHeaders: scheduleHeaders || [],
@@ -231,6 +279,7 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
       }
       if (scheduleRows.length > 0 || scheduleFile) {
         saveScheduleForMinor(minor.id, {
+          fileId,
           fileName: scheduleFileName,
           fileUrl: scheduleFile,
           rows: scheduleRows,
@@ -403,15 +452,14 @@ export default function AddMinorModal({ isOpen, onClose, project, onSaved }) {
             {scheduleFileName && (
               <div className="flex items-center gap-2">
                 {scheduleFile && (
-                  <a
-                    href={scheduleFile}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={(e) => handleViewSchedulePdf(scheduleFile || scheduleFileId, scheduleFileName, e)}
                     className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold underline"
                     title="View uploaded schedule PDF"
                   >
                     <Eye size={12} /> View PDF
-                  </a>
+                  </button>
                 )}
                 <button
                   type="button"

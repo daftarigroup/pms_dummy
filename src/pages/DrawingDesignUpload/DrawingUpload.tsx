@@ -25,6 +25,7 @@ import {
   saveScheduleForMinor
 } from '../../utils/storageManager';
 import { parsePdfTableFile } from '../../utils/pdfTableParser';
+import { saveFileToIndexedDB, getFileFromIndexedDB, setMemoryFile, getMemoryFile } from '../../utils/fileStorage';
 import { parseDesignFile, DESIGN_COLUMNS } from '../ExecutionActualReport/UploadDesign';
 import { amountInWords, fileToBase64, compressImageToBase64, generateId, getTodayDate } from '../../utils/helpers';
 import DataTable from '../../components/DataTable';
@@ -133,6 +134,7 @@ export default function DrawingUpload() {
   const [newMinorScheduleFileName, setNewMinorScheduleFileName] = useState('');
   const [newMinorScheduleRows, setNewMinorScheduleRows] = useState([]);
   const [newMinorScheduleHeaders, setNewMinorScheduleHeaders] = useState([]);
+  const [newMinorScheduleFileId, setNewMinorScheduleFileId] = useState('');
   const [parsingSchedule, setParsingSchedule] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -220,6 +222,7 @@ export default function DrawingUpload() {
     setNewMinorFileName('');
     setNewMinorRows([]);
     setNewMinorScheduleFile('');
+    setNewMinorScheduleFileId('');
     setNewMinorScheduleFileName('');
     setNewMinorScheduleRows([]);
     setNewMinorScheduleHeaders([]);
@@ -269,8 +272,14 @@ export default function DrawingUpload() {
     const toastId = toast.loading('Reading & parsing PDF schedule table data...');
 
     try {
+      const fileId = `sched_${Date.now()}`;
+      const blobUrl = URL.createObjectURL(file);
+      setMemoryFile(fileId, blobUrl);
+      saveFileToIndexedDB(fileId, file);
+
       const parsed = await parsePdfTableFile(file);
-      setNewMinorScheduleFile(parsed.fileUrl);
+      setNewMinorScheduleFile(blobUrl);
+      setNewMinorScheduleFileId(fileId);
       setNewMinorScheduleFileName(parsed.fileName);
       setNewMinorScheduleRows(parsed.rows || []);
       setNewMinorScheduleHeaders(parsed.headers || []);
@@ -283,8 +292,13 @@ export default function DrawingUpload() {
     } catch (err) {
       console.error('Failed to parse PDF schedule:', err);
       try {
-        const fileUrl = await fileToBase64(file);
-        setNewMinorScheduleFile(fileUrl);
+        const fileId = `sched_${Date.now()}`;
+        const blobUrl = URL.createObjectURL(file);
+        setMemoryFile(fileId, blobUrl);
+        saveFileToIndexedDB(fileId, file);
+
+        setNewMinorScheduleFile(blobUrl);
+        setNewMinorScheduleFileId(fileId);
         setNewMinorScheduleFileName(file.name);
         setNewMinorScheduleRows([]);
         setNewMinorScheduleHeaders([]);
@@ -299,10 +313,42 @@ export default function DrawingUpload() {
 
   const handleRemoveSchedule = () => {
     setNewMinorScheduleFile('');
+    setNewMinorScheduleFileId('');
     setNewMinorScheduleFileName('');
     setNewMinorScheduleRows([]);
     setNewMinorScheduleHeaders([]);
     toast.success('Schedule removed');
+  };
+
+  const handleViewSchedulePdf = async (fileUrlOrId, fileName, e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    if (!fileUrlOrId) return;
+
+    if (fileUrlOrId.startsWith('blob:') || fileUrlOrId.startsWith('data:')) {
+      window.open(fileUrlOrId, '_blank');
+      return;
+    }
+
+    const id = fileUrlOrId.startsWith('idb:') ? fileUrlOrId.replace('idb:', '') : fileUrlOrId;
+    const mem = getMemoryFile(id);
+    if (mem) {
+      window.open(mem, '_blank');
+      return;
+    }
+
+    const toastId = toast.loading('Opening schedule document...');
+    try {
+      const data = await getFileFromIndexedDB(id);
+      if (data) {
+        toast.dismiss(toastId);
+        window.open(data, '_blank');
+      } else {
+        toast.error('Schedule document not found', { id: toastId });
+      }
+    } catch {
+      toast.error('Could not load document', { id: toastId });
+    }
   };
 
   const handleAddMinor = () => {
@@ -310,6 +356,7 @@ export default function DrawingUpload() {
       toast.error('Minor Name is required');
       return;
     }
+    const fileId = newMinorScheduleFileId || `sched_${Date.now()}`;
     const minor = {
       id: generateId(),
       projectNo: formProject.serialNo,
@@ -318,7 +365,8 @@ export default function DrawingUpload() {
       poNumber: selectedMinorPoInfo?.poNumber || '',
       poAmount: selectedMinorPoInfo?.poAmount || '',
       workingUnit: selectedMinorPoInfo?.workingUnit || '',
-      scheduleFile: newMinorScheduleFile || '',
+      scheduleFileId: fileId,
+      scheduleFile: newMinorScheduleFile && newMinorScheduleFile.length > 5000 ? `idb:${fileId}` : (newMinorScheduleFile || ''),
       scheduleFileName: newMinorScheduleFileName || '',
       scheduleRows: newMinorScheduleRows || [],
       scheduleHeaders: newMinorScheduleHeaders || [],
@@ -331,6 +379,7 @@ export default function DrawingUpload() {
       }
       if (newMinorScheduleRows.length > 0 || newMinorScheduleFile) {
         saveScheduleForMinor(minor.id, {
+          fileId,
           fileName: newMinorScheduleFileName,
           fileUrl: newMinorScheduleFile,
           rows: newMinorScheduleRows,
@@ -358,6 +407,7 @@ export default function DrawingUpload() {
       setNewMinorFileName('');
       setNewMinorRows([]);
       setNewMinorScheduleFile('');
+      setNewMinorScheduleFileId('');
       setNewMinorScheduleFileName('');
       setNewMinorScheduleRows([]);
       setNewMinorScheduleHeaders([]);
@@ -430,6 +480,7 @@ export default function DrawingUpload() {
     let minorAdded = false;
     let addedMinorName = '';
     if (newMinorName && newMinorName.trim()) {
+      const fileId = newMinorScheduleFileId || `sched_${Date.now()}`;
       const minor = {
         id: generateId(),
         projectNo: formProject.serialNo,
@@ -438,7 +489,8 @@ export default function DrawingUpload() {
         poNumber: selectedMinorPoInfo?.poNumber || '',
         poAmount: selectedMinorPoInfo?.poAmount || '',
         workingUnit: selectedMinorPoInfo?.workingUnit || '',
-        scheduleFile: newMinorScheduleFile || '',
+        scheduleFileId: fileId,
+        scheduleFile: newMinorScheduleFile && newMinorScheduleFile.length > 5000 ? `idb:${fileId}` : (newMinorScheduleFile || ''),
         scheduleFileName: newMinorScheduleFileName || '',
         scheduleRows: newMinorScheduleRows || [],
         scheduleHeaders: newMinorScheduleHeaders || [],
@@ -451,6 +503,7 @@ export default function DrawingUpload() {
         }
         if (newMinorScheduleRows.length > 0 || newMinorScheduleFile) {
           saveScheduleForMinor(minor.id, {
+            fileId,
             fileName: newMinorScheduleFileName,
             fileUrl: newMinorScheduleFile,
             rows: newMinorScheduleRows,
@@ -1058,15 +1111,14 @@ export default function DrawingUpload() {
                     {newMinorScheduleFileName && (
                       <div className="flex items-center gap-2">
                         {newMinorScheduleFile && (
-                          <a
-                            href={newMinorScheduleFile}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <button
+                            type="button"
+                            onClick={(e) => handleViewSchedulePdf(newMinorScheduleFile || newMinorScheduleFileId, newMinorScheduleFileName, e)}
                             className="inline-flex items-center gap-0.5 text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold underline"
                             title="View uploaded schedule PDF"
                           >
                             <Eye size={11} /> View PDF
-                          </a>
+                          </button>
                         )}
                         <button
                           type="button"
@@ -1252,17 +1304,15 @@ export default function DrawingUpload() {
                         </div>
 
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {m.scheduleFile && (
-                            <a
-                              href={m.scheduleFile}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
+                          {((m.scheduleFile && m.scheduleFile !== '') || m.scheduleFileId) && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleViewSchedulePdf(m.scheduleFile || m.scheduleFileId, m.minorName, e)}
                               className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-100 transition-colors"
                               title="View uploaded schedule PDF"
                             >
                               <FileText size={11} /> View Schedule
-                            </a>
+                            </button>
                           )}
                           <button
                             type="button"

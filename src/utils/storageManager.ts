@@ -1,6 +1,7 @@
 // Storage Manager - Handle all localStorage operations
 import toast from 'react-hot-toast';
 import { toInputDateFormat } from '@/lib/utils';
+import { saveFileToIndexedDB, getFileFromIndexedDB } from './fileStorage';
 
 const STORAGE_KEYS = {
   USERS: 'pcb_users',
@@ -110,9 +111,77 @@ const DEFAULT_LEDGER = [];
 const DEFAULT_VENDORS = [];
 const DEFAULT_COMPANIES = [];
 
+/**
+ * Recursively scans an object or array. If any field contains a large base64 or blob string (> 15000 characters),
+ * it saves the file to IndexedDB and replaces the field in localStorage with `idb:${fileId}`.
+ */
+export const offloadLargeFiles = (data, prefix = 'file') => {
+  if (!data) return data;
+  if (typeof data === 'string') {
+    if (data.length > 15000 && (data.startsWith('data:') || data.startsWith('blob:'))) {
+      const fileId = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      saveFileToIndexedDB(fileId, data);
+      return `idb:${fileId}`;
+    }
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data.map((item, idx) => offloadLargeFiles(item, `${prefix}_${idx}`));
+  }
+  if (typeof data === 'object') {
+    const copy = { ...data };
+    for (const key of Object.keys(copy)) {
+      const val = copy[key];
+      if (typeof val === 'string' && val.length > 15000 && (val.startsWith('data:') || val.startsWith('blob:'))) {
+        const fileId = `${prefix}_${key}_${copy.id || copy.minorId || copy.projectNo || Date.now()}`;
+        saveFileToIndexedDB(fileId, val);
+        copy[key] = `idb:${fileId}`;
+      } else if (typeof val === 'object' && val !== null) {
+        copy[key] = offloadLargeFiles(val, `${prefix}_${key}`);
+      }
+    }
+    return copy;
+  }
+  return data;
+};
+
+/**
+ * Scans all pcb_* keys in localStorage and offloads large base64 strings to IndexedDB.
+ * Returns the number of bytes freed.
+ */
+export const cleanupLocalStorageBloat = () => {
+  let freed = 0;
+  if (typeof window === 'undefined' || !window.localStorage) return freed;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('pcb_')) continue;
+      const raw = localStorage.getItem(k);
+      if (!raw || raw.length < 20000) continue; // Only process items containing substantial data
+      
+      try {
+        const parsed = JSON.parse(raw);
+        const cleaned = offloadLargeFiles(parsed, k);
+        const newRaw = JSON.stringify(cleaned);
+        if (newRaw.length < raw.length) {
+          localStorage.setItem(k, newRaw);
+          freed += (raw.length - newRaw.length);
+        }
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+  } catch (err) {
+    console.warn('[Storage] Error during cleanupLocalStorageBloat:', err);
+  }
+  return freed;
+};
+
 export const initializeStorage = () => {
   // Clear legacy data immediately to free up localStorage space
   clearLegacyData();
+  // Migrate any large files from localStorage to IndexedDB to prevent quota exhaustion
+  cleanupLocalStorageBloat();
 
   if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
     localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(DEFAULT_USERS));
@@ -144,48 +213,43 @@ export const getFromStorage = (key) => {
   return data ? JSON.parse(data) : null;
 };
 
-// Save data to storage
+// Save data to storage with automatic quota management
 export const saveToStorage = (key, data) => {
   try {
     localStorage.setItem(key, JSON.stringify(data));
   } catch (err) {
     if (err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014)) {
-      const freed = clearLegacyData();
-      if (freed > 0) {
+      console.warn(`[Storage] QuotaExceededError for key "${key}". Running automatic bloat cleanup...`);
+      clearLegacyData();
+      cleanupLocalStorageBloat();
+
+      // Retry direct save
+      try {
+        localStorage.setItem(key, JSON.stringify(data));
+        return;
+      } catch (retryErr) {
+        // Offload large base64/blob files from data to IndexedDB
         try {
-          localStorage.setItem(key, JSON.stringify(data));
+          const lightweightData = offloadLargeFiles(data, key);
+          localStorage.setItem(key, JSON.stringify(lightweightData));
           return;
-        } catch (retryErr) {
-          // If it still fails, drop images from data if present to save space
-          try {
-            const dataString = JSON.stringify(data);
-            // Rough size check - if still too big, notify
-            toast.error('Browser storage is full - could not save. Try removing old uploaded files/attachments to free up space.', { duration: 6000 });
-          } catch(e) {}
+        } catch (offloadErr) {
+          if (Array.isArray(data) && data.length > 40) {
+            try {
+              const trimmed = offloadLargeFiles(data.slice(-40), key);
+              localStorage.setItem(key, JSON.stringify(trimmed));
+              toast('Storage limit reached; preserved the most recent records.', { icon: '⚠️', duration: 4000 });
+              return;
+            } catch {}
+          }
+          toast.error('Browser storage is full - could not save. Try removing old uploaded files/attachments to free up space.', { duration: 6000 });
+          throw retryErr;
         }
-      } else {
-        // Automatically try to delete oldest items from key if it's an array
-        if (Array.isArray(data) && data.length > 50) {
-           try {
-             // Keep only the newest 50 items
-             const trimmedData = data.slice(-50);
-             localStorage.setItem(key, JSON.stringify(trimmedData));
-             // react-hot-toast has no `.warn` - calling it here used to throw and
-             // skip this `return`, so the save "succeeded" but the caller still saw
-             // the original QuotaExceededError re-thrown below.
-             toast('Storage was full, so older records were removed to save new data.', { icon: '⚠️', duration: 5000 });
-             return;
-           } catch(trimErr) {
-              // Ignore
-           }
-        }
-        
-        toast.error('Browser storage is full - could not save. Try removing old uploaded files/attachments to free up space.', { duration: 6000 });
       }
     } else {
       toast.error('Failed to save data');
+      throw err;
     }
-    throw err;
   }
 };
 
@@ -2893,9 +2957,17 @@ export const saveSchedules = (schedules) => {
 export const saveScheduleForMinor = (minorId, scheduleData) => {
   const all = getSchedules();
   const existingIdx = all.findIndex(s => s.minorId === minorId);
+  const fileId = scheduleData?.fileId || `sched_${minorId}`;
+
+  if (scheduleData?.fileUrl && (scheduleData.fileUrl.startsWith('data:') || scheduleData.fileUrl.startsWith('blob:'))) {
+    saveFileToIndexedDB(fileId, scheduleData.fileUrl);
+  }
+
   const record = {
     minorId,
     ...scheduleData,
+    fileId,
+    fileUrl: scheduleData?.fileUrl && scheduleData.fileUrl.length > 10000 ? `idb:${fileId}` : (scheduleData?.fileUrl || ''),
     updatedAt: new Date().toISOString()
   };
   if (existingIdx >= 0) {
@@ -2913,11 +2985,12 @@ export const getScheduleForMinor = (minorId) => {
   if (found) return found;
   const minors = getMinors();
   const minor = minors.find(m => m.id === minorId);
-  if (minor?.scheduleRows || minor?.scheduleFile) {
+  if (minor?.scheduleRows || minor?.scheduleFile || minor?.scheduleFileId) {
     return {
       minorId,
       fileName: minor.scheduleFileName || '',
       fileUrl: minor.scheduleFile || '',
+      fileId: minor.scheduleFileId || `sched_${minor.id}`,
       rows: minor.scheduleRows || [],
       headers: minor.scheduleHeaders || []
     };
@@ -2944,7 +3017,12 @@ export const getProjectOrMinor = (id) => {
         contractorName: minor.contractorName || parent.contractorName,
         isMinor: true,
         parentProjectNo: parent.serialNo,
-        poNumber: minor.poNumber || parent.poNumber || ''
+        poNumber: minor.poNumber || parent.poNumber || '',
+        scheduleFile: minor.scheduleFile || '',
+        scheduleFileId: minor.scheduleFileId || '',
+        scheduleFileName: minor.scheduleFileName || '',
+        scheduleRows: minor.scheduleRows || [],
+        scheduleHeaders: minor.scheduleHeaders || []
       };
     }
   }
