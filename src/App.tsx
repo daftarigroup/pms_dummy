@@ -7,6 +7,9 @@ import AddProject from './pages/NewProject/Add_Project';
 import AllProject from './pages/NewProject/All_Project';
 import ViewDesign from './pages/ExecutionActualReport/ViewDesign';
 import ProjectMinors from './pages/ExecutionActualReport/ProjectMinors';
+import ProjectAbstractPage from './pages/ExecutionActualReport/ProjectAbstractPage';
+import RAPlanningPage from './pages/ExecutionActualReport/RAPlanning/RAPlanningPage';
+import FinalComparativePage from './pages/ExecutionActualReport/FinalComparative/FinalComparativePage';
 import ExecutionDetails from './pages/ExecutionActualReport/ExecutionDetails';
 import ActualDetails from './pages/ExecutionActualReport/ActualDetails';
 import AutoComparison from './pages/ExecutionActualReport/AutoComparison';
@@ -83,6 +86,11 @@ function App() {
                   <Route path="upload-design" element={<UploadDesignPage />} />
                   <Route path="all-project" element={<AllProject />} />
                   <Route path="project-minors/:projectNo" element={<ProjectMinors />} />
+                  <Route path="project-abstract/:projectNo" element={<ProjectAbstractPage />} />
+                  <Route path="ra-planning/:projectNo" element={<RAPlanningPage />} />
+                  <Route path="planned-vs-executed/:projectNo" element={<RAPlanningPage />} />
+                  <Route path="final-comparative/:projectNo" element={<FinalComparativePage />} />
+                  <Route path="final-comparative" element={<FinalComparativePage />} />
                   <Route path="view-design/:projectNo" element={<ViewDesign />} />
                   <Route path="schedule-report/:projectNo" element={<ScheduleReport />} />
                   <Route path="product-imf/:projectNo" element={<ProductIMF />} />

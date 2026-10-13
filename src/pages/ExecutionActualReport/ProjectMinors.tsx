@@ -73,7 +73,7 @@ export default function ProjectMinors() {
     );
   }
 
-  const filteredMinors = minors.filter(m => 
+  const filteredMinors = minors.filter(m =>
     m.minorName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -153,13 +153,12 @@ export default function ProjectMinors() {
               </span>
             </div>
             <div className="flex items-center gap-3">
-              <span className={`text-base font-extrabold ${
-                overallPercentage === 100
+              <span className={`text-base font-extrabold ${overallPercentage === 100
                   ? 'text-emerald-600'
                   : overallPercentage > 0
-                  ? 'text-indigo-600'
-                  : 'text-gray-500'
-              }`}>
+                    ? 'text-indigo-600'
+                    : 'text-gray-500'
+                }`}>
                 {overallPercentage}%
               </span>
             </div>
@@ -168,13 +167,12 @@ export default function ProjectMinors() {
           {/* Long Overall Progress Bar */}
           <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden shadow-inner p-0.5">
             <div
-              className={`h-full rounded-full transition-all duration-700 ${
-                overallPercentage === 100
+              className={`h-full rounded-full transition-all duration-700 ${overallPercentage === 100
                   ? 'bg-emerald-500'
                   : overallPercentage > 0
-                  ? 'bg-gradient-to-r from-indigo-500 via-indigo-600 to-emerald-500'
-                  : 'bg-transparent'
-              }`}
+                    ? 'bg-gradient-to-r from-indigo-500 via-indigo-600 to-emerald-500'
+                    : 'bg-transparent'
+                }`}
               style={{ width: `${overallPercentage}%` }}
             />
           </div>

@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   FileSpreadsheet,
   Download,
@@ -18,7 +19,9 @@ import {
   Sigma,
   ListFilter,
   Eye,
-  FolderTree
+  FolderTree,
+  FileBarChart2,
+  ArrowUpRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
@@ -29,6 +32,9 @@ import {
   updateExecution
 } from '../../utils/storageManager';
 import { generateId, formatDate, buildChainageDiffMap } from '../../utils/helpers';
+import FinalComparativeView from './FinalComparative/FinalComparativeView';
+import RAPlanningView from './RAPlanning/RAPlanningView';
+import ProjectAbstractView from './ProjectAbstract/ProjectAbstractView';
 
 // Standard pipeline diameters common in lift irrigation & water works
 const DEFAULT_DIAMETERS = [110, 125, 140, 160, 180, 200, 225, 250, 280, 315, 355, 400, 450, 500];
@@ -139,8 +145,8 @@ function buildAlignmentGroups(rows, sortedDias = DEFAULT_DIAMETERS, minorsList =
 
     // 3. Pipe Dia (Range: e.g. 140 - 630 or single 140)
     const dias = Array.from(
-      new Set(groupRows.map(r => parseFloat(r.pipeDia)).filter(d => !isNaN(d) && d > 0))
-    ).sort((a, b) => a - b);
+      new Set<number>(groupRows.map(r => parseFloat(r.pipeDia)).filter(d => !isNaN(d) && d > 0))
+    ).sort((a: number, b: number) => a - b);
     const minDia = dias.length > 0 ? dias[0] : null;
     const maxDia = dias.length > 0 ? dias[dias.length - 1] : null;
     const pipeDiaDisplay =
@@ -167,7 +173,7 @@ function buildAlignmentGroups(rows, sortedDias = DEFAULT_DIAMETERS, minorsList =
     const bfStatus = getStatus(bfCount, total);
 
     // 5. Remarks & Valves
-    const remarksSet = new Set();
+    const remarksSet = new Set<string>();
     groupRows.forEach(r => {
       const rm = (r.remark || r.valve || '').trim();
       if (rm && rm !== '-' && rm !== 'FALSE' && rm !== 'TRUE' && rm !== 'PENDING') {
@@ -267,17 +273,19 @@ function buildAlignmentGroups(rows, sortedDias = DEFAULT_DIAMETERS, minorsList =
 }
 
 export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) {
-  // Active tab: 'COMBINED_ALL' (if 2+ minors), minor.id, or 'ABSTRACT'
+  const navigate = useNavigate();
+
+  // Active tab: 'COMBINED_ALL' (if 2+ minors), minor.id, 'FINAL_COMPARATIVE', 'RA2_PLANNING', or 'ABSTRACT'
   const [activeTab, setActiveTab] = useState(() => {
     if (minors.length >= 2) return 'COMBINED_ALL';
-    return minors.length > 0 ? minors[0].id : 'ABSTRACT';
+    return minors.length > 0 ? minors[0].id : 'COMBINED_ALL';
   });
 
   const [dataSourceMode, setDataSourceMode] = useState('excavation'); // 'excavation' (default - basis of excavation page table) | 'all_design'
   const [searchQuery, setSearchQuery] = useState('');
   const [alignmentFilter, setAlignmentFilter] = useState('');
   const [viewMode, setViewMode] = useState('grouped'); // 'grouped' (as requested) | 'detailed'
-  const [expandedAlignments, setExpandedAlignments] = useState(() => new Set());
+  const [expandedAlignments, setExpandedAlignments] = useState<Set<string>>(() => new Set<string>());
   const [editingRemarkRow, setEditingRemarkRow] = useState(null); // rowId
   const [tempRemark, setTempRemark] = useState('');
 
@@ -286,13 +294,17 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
     return getExecutions();
   }, [minors, activeTab]);
 
-  // Determine current active minor
+  // Determine current active view
   const isCombinedView = activeTab === 'COMBINED_ALL';
+  const isFinalComparativeView = activeTab === 'FINAL_COMPARATIVE';
+  const isRAPlanningView = activeTab === 'RA2_PLANNING';
   const isAbstractView = activeTab === 'ABSTRACT';
+  const isDPRTableView = !isFinalComparativeView && !isRAPlanningView && !isAbstractView;
+
   const currentMinor = useMemo(() => {
-    if (isCombinedView || isAbstractView) return null;
+    if (isCombinedView || !isDPRTableView) return null;
     return minors.find(m => m.id === activeTab) || minors[0] || null;
-  }, [minors, activeTab, isCombinedView, isAbstractView]);
+  }, [minors, activeTab, isCombinedView, isDPRTableView]);
 
   // 1. Compute Combined Data across ALL Minors (The Total / Sum of all reports)
   const allMinorsSummary = useMemo(() => {
@@ -313,8 +325,8 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
       gDiaExecutedTotals[d] = 0;
     });
 
-    const allAlignmentsSet = new Set();
-    const allDiametersSet = new Set(DEFAULT_DIAMETERS);
+    const allAlignmentsSet = new Set<string>();
+    const allDiametersSet = new Set<number>(DEFAULT_DIAMETERS);
 
     minors.forEach(m => {
       const dRows = getDesignByProject(m.id) || (m.serialNo ? getDesignByProject(m.serialNo) : []);
@@ -781,9 +793,9 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
   }, [isCombinedView, allMinorsSummary.allCombinedRows, currentMinorData?.rows, alignmentFilter, searchQuery]);
 
   // 5. Expand / Collapse handlers
-  const toggleExpand = (groupId) => {
+  const toggleExpand = (groupId: string) => {
     setExpandedAlignments(prev => {
-      const next = new Set(prev);
+      const next = new Set<string>(prev);
       if (next.has(groupId)) {
         next.delete(groupId);
       } else {
@@ -794,11 +806,11 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
   };
 
   const handleExpandAll = () => {
-    setExpandedAlignments(new Set(activeGroupedRows.map(g => g.id)));
+    setExpandedAlignments(new Set<string>(activeGroupedRows.map(g => g.id)));
   };
 
   const handleCollapseAll = () => {
-    setExpandedAlignments(new Set());
+    setExpandedAlignments(new Set<string>());
   };
 
   // 6. ABSTRACT COMPARATIVE TABLE (All Minors with Grand Total Row)
@@ -1085,7 +1097,9 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col mt-4">
-      <div className="p-3 sm:p-4 bg-slate-50 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      {isDPRTableView ? (
+        <>
+          <div className="p-3 sm:p-4 bg-slate-50 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 flex-shrink-0">
           <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center flex-shrink-0">
             <FileSpreadsheet size={18} />
@@ -1228,119 +1242,8 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
       </div>
 
       {/* 3. Main Table Area */}
-      {isAbstractView ? (
-        /* ABSTRACT (ALL MINORS COMPARATIVE VIEW WITH TOTAL/SUM ROW AT BOTTOM) */
-        <div className="p-4 space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-            <div>
-              <h4 className="font-bold text-sm text-slate-900 uppercase tracking-wide">
-                ABSTRACT — All Minors Execution Summary
-              </h4>
-              <p className="text-xs text-slate-500">
-                Comparative progress across all {minors.length} minors with Grand Totals
-              </p>
-            </div>
-            <div className="text-right">
-              <span className="text-xs text-slate-400 block font-medium">Grand Overall Progress</span>
-              <span className="text-lg font-black text-indigo-600">
-                {abstractData.totals.percentage}%
-              </span>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto rounded-lg border border-slate-300 shadow-xs">
-            <table className="min-w-full text-xs text-left border-collapse font-sans">
-              <thead className="bg-slate-100 text-slate-800 uppercase text-[10px] font-black border-b border-slate-300">
-                <tr>
-                  <th className="px-3 py-2.5 border-r border-slate-200">#</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200">Minor Name</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200">Contractor</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200 text-center">Design Rows</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200 text-right">Total RMT</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200 text-right">Excavation (RMT)</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200 text-right">Pipe Laying (RMT)</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200 text-right">Back Filling (RMT)</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200 text-right">Executed (RMT)</th>
-                  <th className="px-3 py-2.5 border-r border-slate-200 text-center">Progress %</th>
-                  <th className="px-3 py-2.5 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {abstractData.minorsList.map((m, idx) => (
-                  <tr key={m.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-3 py-2 font-mono text-slate-400 text-center border-r border-slate-200">{idx + 1}</td>
-                    <td className="px-3 py-2 font-bold text-slate-900 border-r border-slate-200">{m.minorName}</td>
-                    <td className="px-3 py-2 text-slate-600 border-r border-slate-200">{m.contractorName}</td>
-                    <td className="px-3 py-2 text-center font-mono border-r border-slate-200">{m.totalRows}</td>
-                    <td className="px-3 py-2 text-right font-mono font-semibold border-r border-slate-200">{m.totalRmt.toLocaleString()} m</td>
-                    <td className="px-3 py-2 text-right font-mono text-blue-700 border-r border-slate-200">{m.excRmt.toLocaleString()} m</td>
-                    <td className="px-3 py-2 text-right font-mono text-amber-700 border-r border-slate-200">{m.plRmt.toLocaleString()} m</td>
-                    <td className="px-3 py-2 text-right font-mono text-emerald-700 border-r border-slate-200">{m.bfRmt.toLocaleString()} m</td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-slate-900 border-r border-slate-200">{m.fullyExecutedRmt.toLocaleString()} m</td>
-                    <td className="px-3 py-2 text-center border-r border-slate-200">
-                      <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
-                        m.percentage === 100
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : m.percentage > 0
-                          ? 'bg-indigo-100 text-indigo-800'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}>
-                        {m.percentage}%
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab(m.id)}
-                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-semibold text-[10px] transition-colors cursor-pointer"
-                      >
-                        Open Sheet
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-
-              {/* TOTAL / SUM OF BOTH / ALL MINORS ROW */}
-              <tfoot className="bg-slate-900 text-white font-mono text-xs font-bold border-t-2 border-slate-950">
-                <tr>
-                  <td colSpan={3} className="px-4 py-2.5 text-right font-black uppercase text-amber-300 border-r border-slate-700">
-                    TOTAL / SUM (ALL {minors.length} MINORS)
-                  </td>
-                  <td className="px-3 py-2.5 text-center font-black border-r border-slate-700 text-indigo-200">
-                    {abstractData.totals.totalRows}
-                  </td>
-                  <td className="px-3 py-2.5 text-right font-black border-r border-slate-700 text-amber-300">
-                    {abstractData.totals.totalRmt.toLocaleString()} m
-                  </td>
-                  <td className="px-3 py-2.5 text-right font-black border-r border-slate-700 text-blue-300">
-                    {abstractData.totals.excRmt.toLocaleString()} m
-                  </td>
-                  <td className="px-3 py-2.5 text-right font-black border-r border-slate-700 text-amber-200">
-                    {abstractData.totals.plRmt.toLocaleString()} m
-                  </td>
-                  <td className="px-3 py-2.5 text-right font-black border-r border-slate-700 text-emerald-300">
-                    {abstractData.totals.bfRmt.toLocaleString()} m
-                  </td>
-                  <td className="px-3 py-2.5 text-right font-black border-r border-slate-700 text-white">
-                    {abstractData.totals.fullyExecutedRmt.toLocaleString()} m
-                  </td>
-                  <td className="px-3 py-2.5 text-center border-r border-slate-700">
-                    <span className="bg-emerald-500 text-slate-950 px-2 py-0.5 rounded font-black text-xs">
-                      {abstractData.totals.percentage}%
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-center text-slate-400 text-[10px]">
-                    Combined
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-      ) : (
-        /* SPREADSHEET TABLE VIEW (GROUPED OR DETAILED) */
-        <div className="overflow-auto min-h-[380px] max-h-[620px] relative scroll-smooth">
+      {/* SPREADSHEET TABLE VIEW (GROUPED OR DETAILED) */}
+      <div className="overflow-auto min-h-[380px] max-h-[620px] relative scroll-smooth">
           {(viewMode === 'grouped' ? activeGroupedRows.length === 0 : activeDetailedRows.length === 0) ? (
             <div className="p-12 text-center text-slate-500 space-y-3 bg-slate-50/50 rounded-lg m-4 border border-dashed border-slate-300">
               <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
@@ -1868,6 +1771,28 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
             </table>
           )}
         </div>
+        </>
+      ) : isFinalComparativeView ? (
+        <div className="p-2 sm:p-4 overflow-y-auto">
+          <FinalComparativeView
+            projectNo={project?.serialNo || 'PN-002'}
+            projectName={project?.projectName || 'Project'}
+          />
+        </div>
+      ) : isRAPlanningView ? (
+        <div className="p-2 sm:p-4 overflow-y-auto">
+          <RAPlanningView
+            projectNo={project?.serialNo || 'PN-002'}
+            projectName={project?.projectName || 'Project'}
+          />
+        </div>
+      ) : (
+        <div className="p-2 sm:p-4 overflow-y-auto">
+          <ProjectAbstractView
+            projectNo={project?.serialNo || 'PN-002'}
+            projectName={project?.projectName || 'Project'}
+          />
+        </div>
       )}
 
       {/* 4. Bottom Sheet Tabs Bar (Google Sheets Style) */}
@@ -1904,19 +1829,95 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
           </button>
         ))}
 
-        {/* Abstract Sheet Tab */}
-        <button
-          type="button"
-          onClick={() => setActiveTab('ABSTRACT')}
-          className={`px-3.5 py-1.5 text-xs font-black uppercase tracking-wider rounded-t-md transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer border-t border-x ${
-            activeTab === 'ABSTRACT'
-              ? 'bg-white text-emerald-800 border-slate-300 shadow-sm border-b-2 border-b-emerald-600 -mb-1.5 pb-2'
-              : 'bg-slate-200/80 text-slate-600 hover:bg-slate-200 border-transparent hover:text-slate-900'
-          }`}
-        >
-          <Layers size={13} className="text-emerald-600" />
-          <span>ABSTRACT</span>
-        </button>
+        {/* Divider */}
+        <div className="h-5 w-px bg-slate-300 mx-1 flex-shrink-0" />
+
+        {/* FINAL COMPARATIVE TAB & BUTTON (TOTAL OF ALL MINORS) */}
+        <div className="inline-flex items-center">
+          <button
+            type="button"
+            onClick={() => setActiveTab('FINAL_COMPARATIVE')}
+            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-t-md transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer border-t border-x ${
+              activeTab === 'FINAL_COMPARATIVE'
+                ? 'bg-teal-100 text-teal-950 border-teal-400 shadow-sm border-b-2 border-b-teal-600 -mb-1.5 pb-2 font-black'
+                : 'bg-slate-200/80 text-teal-900 hover:bg-slate-200 border-transparent hover:text-teal-950'
+            }`}
+            title="Final Comparative Report (Total of All Minors)"
+          >
+            <FileBarChart2 size={13} className="text-teal-700" />
+            <span>FINAL COMPARATIVE</span>
+            <span className="text-[10px] bg-teal-200/90 text-teal-950 px-1 py-0.2 rounded font-extrabold">TOTAL</span>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/final-comparative/${encodeURIComponent(project?.serialNo || 'PN-002')}`);
+            }}
+            className="p-1 text-slate-400 hover:text-teal-700 transition cursor-pointer"
+            title="Open Final Comparative in Full Page"
+          >
+            <ArrowUpRight size={13} />
+          </button>
+        </div>
+
+        {/* RA2 PLANNING TAB & BUTTON (TOTAL OF ALL MINORS) */}
+        <div className="inline-flex items-center">
+          <button
+            type="button"
+            onClick={() => setActiveTab('RA2_PLANNING')}
+            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-t-md transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer border-t border-x ${
+              activeTab === 'RA2_PLANNING'
+                ? 'bg-purple-100 text-purple-950 border-purple-400 shadow-sm border-b-2 border-b-purple-600 -mb-1.5 pb-2 font-black'
+                : 'bg-slate-200/80 text-purple-900 hover:bg-slate-200 border-transparent hover:text-purple-950'
+            }`}
+            title="RA2 Planning (Planned vs Executed - Total of All Minors)"
+          >
+            <TrendingUp size={13} className="text-purple-700" />
+            <span>RA2 PLANNING</span>
+            <span className="text-[10px] bg-purple-200/90 text-purple-950 px-1 py-0.2 rounded font-extrabold">TOTAL</span>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/ra-planning/${encodeURIComponent(project?.serialNo || 'PN-002')}`);
+            }}
+            className="p-1 text-slate-400 hover:text-purple-700 transition cursor-pointer"
+            title="Open RA2 Planning in Full Page"
+          >
+            <ArrowUpRight size={13} />
+          </button>
+        </div>
+
+        {/* ABSTRACT TAB & BUTTON (TOTAL OF ALL MINORS) */}
+        <div className="inline-flex items-center">
+          <button
+            type="button"
+            onClick={() => setActiveTab('ABSTRACT')}
+            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-t-md transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer border-t border-x ${
+              activeTab === 'ABSTRACT'
+                ? 'bg-indigo-100 text-indigo-950 border-indigo-400 shadow-sm border-b-2 border-b-indigo-600 -mb-1.5 pb-2 font-black'
+                : 'bg-slate-200/80 text-indigo-900 hover:bg-slate-200 border-transparent hover:text-indigo-950'
+            }`}
+            title="Project Abstract Sheet (Total of All Minors)"
+          >
+            <FileSpreadsheet size={13} className="text-indigo-700" />
+            <span>Abstract</span>
+            <span className="text-[10px] bg-indigo-200/90 text-indigo-950 px-1 py-0.2 rounded font-extrabold">TOTAL</span>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/project-abstract/${encodeURIComponent(project?.serialNo || 'PN-002')}`);
+            }}
+            className="p-1 text-slate-400 hover:text-indigo-700 transition cursor-pointer"
+            title="Open Abstract in Full Page"
+          >
+            <ArrowUpRight size={13} />
+          </button>
+        </div>
       </div>
     </div>
   );

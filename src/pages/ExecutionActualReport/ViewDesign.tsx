@@ -127,8 +127,8 @@ export default function ViewDesign() {
           <td key={col.key} className="px-4 py-3 text-center text-sm text-gray-700 whitespace-nowrap leading-none">
             {col.key === 'valve'
               ? (item[col.key] !== undefined && item[col.key] !== null && String(item[col.key]).trim() !== ''
-                  ? String(item[col.key])
-                  : '-')
+                ? String(item[col.key])
+                : '-')
               : displayVal(item[col.key])}
           </td>
         ))}
@@ -136,11 +136,10 @@ export default function ViewDesign() {
           <button
             onClick={() => setExecRow({ ...item, __serialNo: serialNo })}
             disabled={isExecuted}
-            className={`flex items-center justify-center gap-1.5 border w-full h-[30px] rounded text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-              isExecuted
+            className={`flex items-center justify-center gap-1.5 border w-full h-[30px] rounded text-[10px] font-semibold uppercase tracking-wide transition-colors ${isExecuted
                 ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
                 : 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-100'
-            }`}
+              }`}
           >
             {isExecuted ? <Check size={12} /> : <Hammer size={12} />} {isExecuted ? 'Done' : 'Execution'}
           </button>
@@ -149,11 +148,10 @@ export default function ViewDesign() {
           <button
             onClick={() => setActualRow({ ...item, __serialNo: serialNo })}
             disabled={isActualDone}
-            className={`flex items-center justify-center gap-1.5 border w-full h-[30px] rounded text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-              isActualDone
+            className={`flex items-center justify-center gap-1.5 border w-full h-[30px] rounded text-[10px] font-semibold uppercase tracking-wide transition-colors ${isActualDone
                 ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
                 : 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'
-            }`}
+              }`}
           >
             {isActualDone ? <Check size={12} /> : <Ruler size={12} />} {isActualDone ? 'Done' : 'Actual'}
           </button>
@@ -190,8 +188,8 @@ export default function ViewDesign() {
             <span className="text-gray-800">
               {col.key === 'valve'
                 ? (item[col.key] !== undefined && item[col.key] !== null && String(item[col.key]).trim() !== ''
-                    ? String(item[col.key])
-                    : '-')
+                  ? String(item[col.key])
+                  : '-')
                 : displayVal(item[col.key])}
             </span>
           </div>
@@ -200,22 +198,20 @@ export default function ViewDesign() {
           <button
             onClick={() => setExecRow({ ...item, __serialNo: serialNo })}
             disabled={isExecuted}
-            className={`flex-1 border py-1.5 rounded-lg text-[9px] font-semibold uppercase tracking-wide flex items-center justify-center gap-1 ${
-              isExecuted
+            className={`flex-1 border py-1.5 rounded-lg text-[9px] font-semibold uppercase tracking-wide flex items-center justify-center gap-1 ${isExecuted
                 ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
                 : 'bg-indigo-50 text-indigo-600 border-indigo-200'
-            }`}
+              }`}
           >
             {isExecuted ? <Check size={11} /> : <Hammer size={11} />} {isExecuted ? 'Done' : 'Execution'}
           </button>
           <button
             onClick={() => setActualRow({ ...item, __serialNo: serialNo })}
             disabled={isActualDone}
-            className={`flex-1 border py-1.5 rounded-lg text-[9px] font-semibold uppercase tracking-wide flex items-center justify-center gap-1 ${
-              isActualDone
+            className={`flex-1 border py-1.5 rounded-lg text-[9px] font-semibold uppercase tracking-wide flex items-center justify-center gap-1 ${isActualDone
                 ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
                 : 'bg-emerald-50 text-emerald-600 border-emerald-200'
-            }`}
+              }`}
           >
             {isActualDone ? <Check size={11} /> : <Ruler size={11} />} {isActualDone ? 'Done' : 'Actual'}
           </button>
