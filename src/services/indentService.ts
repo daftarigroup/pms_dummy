@@ -83,6 +83,9 @@ export interface IndentRecord {
     rate2?: number;
     rate3?: number;
     vendor_rate?: number;
+    equipment_type?: string;
+    expected_time?: string;
+    day_charge?: number;
 }
 
 function mapIndentRow(r: any): IndentRecord {
@@ -99,6 +102,9 @@ function mapIndentRow(r: any): IndentRecord {
         vendor_type: r.vendor_type || 'Pending',
         indent_status: r.indent_status || '',
         indent_type: r.indent_type || 'Material',
+        equipment_type: r.equipment_type || '',
+        expected_time: r.expected_time || '',
+        day_charge: Number(r.day_charge) || 0,
         no_day: Number(r.no_day) || 0,
         planned1: r.planned1 || '',
         actual1: r.actual1 || '',

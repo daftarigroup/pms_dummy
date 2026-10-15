@@ -25,10 +25,19 @@ export const TabSwitcher = ({ activeTab, onTabChange, tabs }) => {
   );
 };
 
-/**
- * FormActionButtons Component - Standardized Save/Cancel Buttons
- */
-export const FormActionButtons = ({ 
+export interface FormActionButtonsProps {
+  onCancel?: (e?: any) => void;
+  onSubmit?: (e?: any) => void;
+  cancelText?: string;
+  submitText?: string;
+  loading?: boolean;
+  className?: string;
+  formId?: string | null;
+  extraButton?: React.ReactNode;
+  secondarySubmitButton?: React.ReactNode;
+}
+
+export const FormActionButtons: React.FC<FormActionButtonsProps> = ({ 
   onCancel, 
   onSubmit, 
   cancelText = 'Cancel', 
@@ -36,10 +45,11 @@ export const FormActionButtons = ({
   loading = false,
   className = "",
   formId = null,
-  extraButton = null
+  extraButton = null,
+  secondarySubmitButton = null
 }) => {
   return (
-    <div className={`flex gap-3 items-center ${className}`}>
+    <div className={`flex flex-wrap sm:flex-nowrap gap-2 md:gap-3 items-center ${className}`}>
       <button
         type="button"
         onClick={onCancel}
@@ -60,7 +70,7 @@ export const FormActionButtons = ({
         form={formId}
         onClick={onSubmit}
         disabled={loading}
-        className="flex-[1.5] bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg transition-all active:scale-95 shadow-md text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className="flex-[1.2] bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-3 rounded-lg transition-all active:scale-95 shadow-md text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 whitespace-nowrap"
       >
         {loading ? (
           <>
@@ -74,6 +84,12 @@ export const FormActionButtons = ({
           </>
         )}
       </button>
+
+      {secondarySubmitButton && (
+        <div className="flex-[1.4] flex items-center w-full sm:w-auto">
+          {secondarySubmitButton}
+        </div>
+      )}
     </div>
   );
 };

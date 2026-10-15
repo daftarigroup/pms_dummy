@@ -9,6 +9,7 @@ import ViewDesign from './pages/ExecutionActualReport/ViewDesign';
 import ProjectMinors from './pages/ExecutionActualReport/ProjectMinors';
 import ProjectAbstractPage from './pages/ExecutionActualReport/ProjectAbstractPage';
 import RAPlanningPage from './pages/ExecutionActualReport/RAPlanning/RAPlanningPage';
+import RAPlanningAbstractPage from './pages/ExecutionActualReport/RAPlanningAbstractPage';
 import FinalComparativePage from './pages/ExecutionActualReport/FinalComparative/FinalComparativePage';
 import ExecutionDetails from './pages/ExecutionActualReport/ExecutionDetails';
 import ActualDetails from './pages/ExecutionActualReport/ActualDetails';
@@ -89,6 +90,8 @@ function App() {
                   <Route path="project-abstract/:projectNo" element={<ProjectAbstractPage />} />
                   <Route path="ra-planning/:projectNo" element={<RAPlanningPage />} />
                   <Route path="planned-vs-executed/:projectNo" element={<RAPlanningPage />} />
+                  <Route path="ra2-planning-abstract/:projectNo" element={<RAPlanningAbstractPage />} />
+                  <Route path="ra2-planning-abstract" element={<RAPlanningAbstractPage />} />
                   <Route path="final-comparative/:projectNo" element={<FinalComparativePage />} />
                   <Route path="final-comparative" element={<FinalComparativePage />} />
                   <Route path="view-design/:projectNo" element={<ViewDesign />} />

@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import {
   Clock, History as HistoryIcon, ClipboardCheck, User, Phone, Users, Plus, Trash2, Search, RotateCcw,
   Hash, Calendar, FileText, UploadCloud, Check, Eye, Info, IndianRupee, Ruler, ChevronDown,
-  Truck, FileCheck2, Compass, Sparkles
+  Truck, FileCheck2, Compass, Sparkles, CheckCircle2
 } from 'lucide-react';
 import {
   getProjects,
@@ -333,9 +333,17 @@ export default function Mobilization() {
     toast.success('Test entries filled with valid data!');
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const handleSaveOnly = (e) => {
+    if (e) e.preventDefault();
+    saveData(false);
+  };
 
+  const handleSaveAndMoveNext = (e) => {
+    if (e) e.preventDefault();
+    saveData(true);
+  };
+
+  const saveData = (moveNext) => {
     for (const c of formData.consultants) {
       if (!c.poNumber?.trim()) { toast.error('PO Number is required — please select or enter a PO'); return; }
       if (!c.name.trim()) { toast.error('Sub Contractor Name is required'); return; }
@@ -346,18 +354,21 @@ export default function Mobilization() {
     setLoading(true);
     upsertMobilization({ projectNo: formProject.serialNo, consultants: formData.consultants });
     upsertSentPO({ projectNo: formProject.serialNo, consultants: formData.consultants });
-    upsertSurvey({
-      projectNo: formProject.serialNo,
-      surveyStatus: formData.surveyStatus,
-      remarks: formData.surveyRemarks
-    });
-    setLoading(false);
-    setFormProject(null);
-    refresh();
 
-    if (formData.surveyStatus === 'Yes') {
-      toast.success(`${formProject.serialNo} contractor stage complete — moved to Final Approval!`);
+    if (moveNext) {
+      upsertSurvey({
+        projectNo: formProject.serialNo,
+        surveyStatus: 'Yes',
+        remarks: 'Mobilization completed and moved to next stage'
+      });
+      setLoading(false);
+      setFormProject(null);
+      refresh();
+      toast.success(`${formProject.serialNo} saved and moved to next stage!`);
     } else {
+      setLoading(false);
+      setFormProject(null);
+      refresh();
       toast.success(`${formProject.serialNo} contractor details saved`);
     }
   };
@@ -633,7 +644,7 @@ export default function Mobilization() {
         isOpen={!!formProject}
         onClose={() => setFormProject(null)}
         title={formProject ? `Mobilization — ${formProject.serialNo}` : ''}
-        onSubmit={handleSubmit}
+        onSubmit={handleSaveOnly}
         submitText={loading ? 'Saving...' : 'Save'}
         maxWidth="max-w-3xl"
         extraFooterAction={
@@ -647,12 +658,24 @@ export default function Mobilization() {
             <span>Test Entries</span>
           </button>
         }
+        secondarySubmitButton={
+          <button
+            type="button"
+            onClick={handleSaveAndMoveNext}
+            disabled={loading}
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-3 rounded-lg transition-all active:scale-95 shadow-md text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 whitespace-nowrap"
+            title="Save mobilization details and move project to next stage"
+          >
+            <CheckCircle2 size={16} />
+            <span>Save and Move to Next</span>
+          </button>
+        }
       >
         <div className="space-y-3">
           {/* Header Action Row */}
           <div className="flex items-center justify-between pb-1 border-b border-gray-100">
             <span className="text-[10px] md:text-[11px] font-bold text-indigo-500 uppercase tracking-widest">
-              Sub Contractor & Survey Details
+              Sub Contractor Details
             </span>
             <button
               type="button"
@@ -981,45 +1004,6 @@ export default function Mobilization() {
             >
               <Plus size={14} /> Add Sub Contractor
             </button>
-          </div>
-
-          {/* Survey Section - Simple Yes/No status */}
-          <div className="bg-slate-50 border border-gray-200 rounded-lg p-3 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[12px] md:text-[14px] font-semibold text-gray-900 flex items-center gap-1.5">
-                <Compass size={15} className="text-indigo-600" /> Survey Status
-              </span>
-              <span className="text-[11px] text-gray-500">
-                Select "Yes" to complete survey & proceed to Final Approval
-              </span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="block text-[13px] md:text-[15px] text-gray-700 uppercase tracking-tight">
-                  Survey Status <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={formData.surveyStatus}
-                  onChange={(e) => setFormData(prev => ({ ...prev, surveyStatus: e.target.value }))}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-[13px] md:text-[15px] h-[34px] md:h-[38px] bg-white font-medium"
-                >
-                  <option value="No">No</option>
-                  <option value="Yes">Yes</option>
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="block text-[13px] md:text-[15px] text-gray-700 uppercase tracking-tight">
-                  Survey Remarks (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={formData.surveyRemarks}
-                  onChange={(e) => setFormData(prev => ({ ...prev, surveyRemarks: e.target.value }))}
-                  placeholder="Enter any survey remarks"
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-[13px] md:text-[15px] h-[34px] md:h-[38px] bg-white"
-                />
-              </div>
-            </div>
           </div>
         </div>
       </ModalForm>

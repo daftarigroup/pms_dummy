@@ -33,8 +33,6 @@ import {
 } from '../../utils/storageManager';
 import { generateId, formatDate, buildChainageDiffMap } from '../../utils/helpers';
 import FinalComparativeView from './FinalComparative/FinalComparativeView';
-import RAPlanningView from './RAPlanning/RAPlanningView';
-import ProjectAbstractView from './ProjectAbstract/ProjectAbstractView';
 
 // Standard pipeline diameters common in lift irrigation & water works
 const DEFAULT_DIAMETERS = [110, 125, 140, 160, 180, 200, 225, 250, 280, 315, 355, 400, 450, 500];
@@ -275,7 +273,7 @@ function buildAlignmentGroups(rows, sortedDias = DEFAULT_DIAMETERS, minorsList =
 export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) {
   const navigate = useNavigate();
 
-  // Active tab: 'COMBINED_ALL' (if 2+ minors), minor.id, 'FINAL_COMPARATIVE', 'RA2_PLANNING', or 'ABSTRACT'
+  // Active tab: 'COMBINED_ALL' (if 2+ minors), minor.id, or 'FINAL_COMPARATIVE'
   const [activeTab, setActiveTab] = useState(() => {
     if (minors.length >= 2) return 'COMBINED_ALL';
     return minors.length > 0 ? minors[0].id : 'COMBINED_ALL';
@@ -297,9 +295,7 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
   // Determine current active view
   const isCombinedView = activeTab === 'COMBINED_ALL';
   const isFinalComparativeView = activeTab === 'FINAL_COMPARATIVE';
-  const isRAPlanningView = activeTab === 'RA2_PLANNING';
-  const isAbstractView = activeTab === 'ABSTRACT';
-  const isDPRTableView = !isFinalComparativeView && !isRAPlanningView && !isAbstractView;
+  const isDPRTableView = !isFinalComparativeView;
 
   const currentMinor = useMemo(() => {
     if (isCombinedView || !isDPRTableView) return null;
@@ -1772,23 +1768,9 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
           )}
         </div>
         </>
-      ) : isFinalComparativeView ? (
-        <div className="p-2 sm:p-4 overflow-y-auto">
-          <FinalComparativeView
-            projectNo={project?.serialNo || 'PN-002'}
-            projectName={project?.projectName || 'Project'}
-          />
-        </div>
-      ) : isRAPlanningView ? (
-        <div className="p-2 sm:p-4 overflow-y-auto">
-          <RAPlanningView
-            projectNo={project?.serialNo || 'PN-002'}
-            projectName={project?.projectName || 'Project'}
-          />
-        </div>
       ) : (
         <div className="p-2 sm:p-4 overflow-y-auto">
-          <ProjectAbstractView
+          <FinalComparativeView
             projectNo={project?.serialNo || 'PN-002'}
             projectName={project?.projectName || 'Project'}
           />
@@ -1856,64 +1838,6 @@ export default function MinorsDPRTable({ project, minors = [], onDataUpdated }) 
             }}
             className="p-1 text-slate-400 hover:text-teal-700 transition cursor-pointer"
             title="Open Final Comparative in Full Page"
-          >
-            <ArrowUpRight size={13} />
-          </button>
-        </div>
-
-        {/* RA2 PLANNING TAB & BUTTON (TOTAL OF ALL MINORS) */}
-        <div className="inline-flex items-center">
-          <button
-            type="button"
-            onClick={() => setActiveTab('RA2_PLANNING')}
-            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-t-md transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer border-t border-x ${
-              activeTab === 'RA2_PLANNING'
-                ? 'bg-purple-100 text-purple-950 border-purple-400 shadow-sm border-b-2 border-b-purple-600 -mb-1.5 pb-2 font-black'
-                : 'bg-slate-200/80 text-purple-900 hover:bg-slate-200 border-transparent hover:text-purple-950'
-            }`}
-            title="RA2 Planning (Planned vs Executed - Total of All Minors)"
-          >
-            <TrendingUp size={13} className="text-purple-700" />
-            <span>RA2 PLANNING</span>
-            <span className="text-[10px] bg-purple-200/90 text-purple-950 px-1 py-0.2 rounded font-extrabold">TOTAL</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(`/ra-planning/${encodeURIComponent(project?.serialNo || 'PN-002')}`);
-            }}
-            className="p-1 text-slate-400 hover:text-purple-700 transition cursor-pointer"
-            title="Open RA2 Planning in Full Page"
-          >
-            <ArrowUpRight size={13} />
-          </button>
-        </div>
-
-        {/* ABSTRACT TAB & BUTTON (TOTAL OF ALL MINORS) */}
-        <div className="inline-flex items-center">
-          <button
-            type="button"
-            onClick={() => setActiveTab('ABSTRACT')}
-            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-t-md transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer border-t border-x ${
-              activeTab === 'ABSTRACT'
-                ? 'bg-indigo-100 text-indigo-950 border-indigo-400 shadow-sm border-b-2 border-b-indigo-600 -mb-1.5 pb-2 font-black'
-                : 'bg-slate-200/80 text-indigo-900 hover:bg-slate-200 border-transparent hover:text-indigo-950'
-            }`}
-            title="Project Abstract Sheet (Total of All Minors)"
-          >
-            <FileSpreadsheet size={13} className="text-indigo-700" />
-            <span>Abstract</span>
-            <span className="text-[10px] bg-indigo-200/90 text-indigo-950 px-1 py-0.2 rounded font-extrabold">TOTAL</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(`/project-abstract/${encodeURIComponent(project?.serialNo || 'PN-002')}`);
-            }}
-            className="p-1 text-slate-400 hover:text-indigo-700 transition cursor-pointer"
-            title="Open Abstract in Full Page"
           >
             <ArrowUpRight size={13} />
           </button>

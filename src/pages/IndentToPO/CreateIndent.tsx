@@ -28,7 +28,7 @@ import { formatDate, formatDateTimeFull } from '@/lib/utils';
 import { type ColumnDef } from '@tanstack/react-table';
 import { Pill } from '@/components/ui/pill';
 import { ClipLoader as Loader } from 'react-spinners';
-import { Trash, Search, PlusCircle, Download, Plus, Filter, RotateCcw, Sparkles } from 'lucide-react';
+import { Trash, Search, PlusCircle, Download, Plus, Filter, RotateCcw, Sparkles, Wrench } from 'lucide-react';
 import { useSheets } from '@/context/SheetsContext';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { storeApi } from '@/lib/apiClient';
@@ -135,6 +135,8 @@ export default () => {
     const [searchTermProductNameByRow, setSearchTermProductNameByRow] = useState<Record<number, string>>({});
     const [searchTermUOMByRow, setSearchTermUOMByRow] = useState<Record<number, string>>({});
     const [searchTermAreaOfUseByRow, setSearchTermAreaOfUseByRow] = useState<Record<number, string>>({});
+    const [searchTermEqGroupHeadByRow, setSearchTermEqGroupHeadByRow] = useState<Record<number, string>>({});
+    const [searchTermEqAreaOfUseByRow, setSearchTermEqAreaOfUseByRow] = useState<Record<number, string>>({});
 
     const [historyData, setHistoryData] = useState<IndentRecord[]>([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -166,41 +168,76 @@ export default () => {
         loadProjects();
     }, [loadProjects]);
 
+    const productSchema = z.object({
+        groupHead: z.string().nonempty({ message: 'Select Group Head' }),
+        productName: z.string().nonempty({ message: 'Select Product Name' }),
+        quantity: z.preprocess(
+            (val) => {
+                if (val === '' || val === null || val === undefined) return 0;
+                const n = Number(val);
+                return isNaN(n) ? 0 : n;
+            },
+            z.number().gt(0, { message: 'Quantity must be greater than 0' })
+        ),
+        minStockQty: z.preprocess(
+            (val) => {
+                if (val === '' || val === null || val === undefined) return 0;
+                const n = Number(val);
+                return isNaN(n) ? 0 : n;
+            },
+            z.number().optional().nullable()
+        ),
+        uom: z.string().nonempty({ message: 'Select UOM' }),
+        areaOfUse: z.string().nonempty({ message: 'Select Area of Use' }),
+        expectedRequirementDate: z.string().nonempty({ message: 'Select Expected Requirement Date' }),
+        attachment: z.any().optional(),
+        specifications: z.string().optional(),
+    });
+
+    const equipmentSchema = z.object({
+        groupHead: z.string().nonempty({ message: 'Select Group Head' }),
+        areaOfUse: z.string().nonempty({ message: 'Select Area of Use' }),
+        equipmentName: z.string().nonempty({ message: 'Enter Equipment Name' }),
+        type: z.enum(['Rent', 'Owned'] as const, { error: 'Select Type (Rent or Owned)' }),
+        expectedTime: z.string().optional(),
+        dayCharge: z.preprocess(
+            (val) => {
+                if (val === '' || val === null || val === undefined) return undefined;
+                const n = Number(val);
+                return isNaN(n) ? undefined : n;
+            },
+            z.number().optional()
+        ),
+    }).superRefine((data, ctx) => {
+        if (data.type === 'Rent') {
+            if (!data.expectedTime || !data.expectedTime.trim()) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: 'Expected Time is required',
+                    path: ['expectedTime'],
+                });
+            }
+            if (data.dayCharge === undefined || data.dayCharge <= 0) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: 'Day Charge must be > 0',
+                    path: ['dayCharge'],
+                });
+            }
+        }
+    });
+
     const schema = z.object({
         createdDate: z.string().nonempty({ message: 'Select Indent Date' }),
         indenterName: z.string().nonempty({ message: 'Enter Indenter Name' }),
         firmName: z.string().nonempty({ message: 'Select Project Name' }),
         firmId: z.any().optional(),
         indentStatus: z.string().nonempty({ message: 'Select Indent Status' }),
-        products: z
-            .array(
-                z.object({
-                    groupHead: z.string().nonempty({ message: 'Select Group Head' }),
-                    productName: z.string().nonempty({ message: 'Select Product Name' }),
-                    quantity: z.preprocess(
-                        (val) => {
-                            if (val === '' || val === null || val === undefined) return 0;
-                            const n = Number(val);
-                            return isNaN(n) ? 0 : n;
-                        },
-                        z.number().gt(0, { message: 'Quantity must be greater than 0' })
-                    ),
-                    minStockQty: z.preprocess(
-                        (val) => {
-                            if (val === '' || val === null || val === undefined) return 0;
-                            const n = Number(val);
-                            return isNaN(n) ? 0 : n;
-                        },
-                        z.number().optional().nullable()
-                    ),
-                    uom: z.string().nonempty({ message: 'Select UOM' }),
-                    areaOfUse: z.string().nonempty({ message: 'Select Area of Use' }),
-                    expectedRequirementDate: z.string().nonempty({ message: 'Select Expected Requirement Date' }),
-                    attachment: z.any().optional(),
-                    specifications: z.string().optional(),
-                })
-            )
-            .min(1, 'At least one product is required'),
+        products: z.array(productSchema).default([]),
+        equipments: z.array(equipmentSchema).default([]),
+    }).refine((data) => (data.products && data.products.length > 0) || (data.equipments && data.equipments.length > 0), {
+        message: 'At least one Product or Equipment item is required',
+        path: ['products'],
     });
 
     const form = useForm({
@@ -224,13 +261,19 @@ export default () => {
                     groupHead: '',
                 },
             ],
+            equipments: [] as any[],
         },
     });
 
-    const products = form.watch('products');
+    const products = form.watch('products') || [];
+    const equipments = form.watch('equipments') || [];
     const { fields, append, remove } = useFieldArray({
         control: form.control,
         name: 'products',
+    });
+    const { fields: equipmentFields, append: appendEquipment, remove: removeEquipment } = useFieldArray({
+        control: form.control,
+        name: 'equipments',
     });
 
     const [uploadingRows, setUploadingRows] = useState<Set<number>>(new Set());
@@ -320,10 +363,15 @@ export default () => {
         { accessorKey: 'group_head', header: 'Group Head' },
         {
             accessorKey: 'product_name',
-            header: 'Product',
-            cell: ({ getValue }) => (
-                <div className="min-w-[180px] max-w-[320px] break-words whitespace-normal leading-snug">
-                    {getValue() as string || '-'}
+            header: 'Product / Equipment',
+            cell: ({ row, getValue }) => (
+                <div className="min-w-[180px] max-w-[320px] break-words whitespace-normal leading-snug flex items-center gap-1.5 flex-wrap">
+                    {row.original.indent_type === 'Equipment' && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            <Wrench size={10} /> {row.original.equipment_type || 'Equipment'}
+                        </span>
+                    )}
+                    <span>{getValue() as string || '-'}</span>
                 </div>
             )
         },
@@ -649,7 +697,7 @@ export default () => {
         try {
             const firmId = data.firmId || options?.firmObjects?.find((f: { name: string; id: number }) => f.name === data.firmName)?.id || 1;
             const nextIndentNumber = await fetchNextIndentNumber();
-            const attachmentUrls = data.products.map(
+            const productAttachmentUrls = (data.products || []).map(
                 (product) => (product.attachment as unknown as string) || ''
             );
 
@@ -663,7 +711,7 @@ export default () => {
                 timestamp = now.toISOString();
             }
 
-            const rows = data.products.map((product, i) => ({
+            const productRows = (data.products || []).map((product, i) => ({
                 timestamp,
                 planned1: timestamp,
                 indent_number: nextIndentNumber,
@@ -680,10 +728,41 @@ export default () => {
                 indent_status: data.indentStatus,
                 vendor_type: 'Pending',
                 expected_req_date: product.expectedRequirementDate,
-                attachment: attachmentUrls[i] || '',
+                attachment: productAttachmentUrls[i] || '',
                 indent_url: '',
                 status: 'Pending',
+                indent_type: 'Material',
             }));
+
+            const equipmentRows = (data.equipments || []).map((eq) => ({
+                timestamp,
+                planned1: timestamp,
+                indent_number: nextIndentNumber,
+                indenter_name: data.indenterName,
+                area_of_use: eq.areaOfUse,
+                group_head: eq.groupHead,
+                product_name: eq.equipmentName,
+                quantity: 1,
+                min_stock_qty: 0,
+                uom: eq.type === 'Rent' ? 'Rent' : 'Owned',
+                firm_name: data.firmName,
+                firm_id: firmId,
+                specifications: eq.type === 'Rent'
+                    ? `[Equipment - Rent] Expected Time: ${eq.expectedTime}, Day Charge: ₹${eq.dayCharge}`
+                    : `[Equipment - Owned]`,
+                indent_status: data.indentStatus,
+                vendor_type: 'Pending',
+                expected_req_date: data.createdDate || now.toISOString().split('T')[0],
+                attachment: '',
+                indent_url: '',
+                status: 'Pending',
+                indent_type: 'Equipment',
+                equipment_type: eq.type,
+                expected_time: eq.expectedTime || '',
+                day_charge: eq.dayCharge || 0,
+            }));
+
+            const rows = [...productRows, ...equipmentRows];
 
             await storeApi.insert('indent', rows);
 
@@ -692,7 +771,7 @@ export default () => {
             updateIndentSheet(true);
             updateAll(true);
 
-            data.products.forEach(product => {
+            (data.products || []).forEach(product => {
                 const groupHead = product.groupHead || options?.itemGroupHeadMap?.[product.productName] || '';
                 if (!groupHead || !firmId) return;
                 handleProductSelect(0, product.productName, groupHead, Number(product.quantity) || 1).catch(console.error);
@@ -716,6 +795,7 @@ export default () => {
                     expectedRequirementDate: '',
                     groupHead: '',
                 }],
+                equipments: [],
             });
 
             setShowFormModal(false);
@@ -804,7 +884,7 @@ export default () => {
         }
 
         const currentProducts = form.getValues('products') || [];
-        const filledProducts = (currentProducts.length > 0 ? currentProducts : [{}]).map(() => ({
+        const filledProducts = currentProducts.map(() => ({
             groupHead: chosenGroupHead,
             productName: chosenProduct,
             quantity: 100,
@@ -816,13 +896,43 @@ export default () => {
             specifications: 'Standard project site execution requirement',
         }));
 
+        const currentEquipments = form.getValues('equipments') || [];
+        const sampleEquipments = [
+            { name: 'Hydraulic Excavator CAT 320D', type: 'Rent' as const, time: '30 Days', charge: 8500 },
+            { name: 'Hydra Mobile Crane 15T', type: 'Rent' as const, time: '15 Days', charge: 6500 },
+            { name: 'Transit Mixer 6 Cu.M', type: 'Owned' as const, time: '', charge: 0 },
+            { name: 'Motor Grader 140K', type: 'Rent' as const, time: '20 Days', charge: 9000 },
+        ];
+        const filledEquipments = currentEquipments.map((_, idx) => {
+            const sample = sampleEquipments[idx % sampleEquipments.length];
+            return {
+                groupHead: chosenGroupHead,
+                areaOfUse: chosenArea,
+                equipmentName: sample.name,
+                type: sample.type,
+                expectedTime: sample.time,
+                dayCharge: sample.charge,
+            };
+        });
+
         form.reset({
             createdDate: todayStr,
             firmName: projectName,
             firmId: projectId,
             indenterName: indenter,
             indentStatus: priority,
-            products: filledProducts
+            products: filledProducts.length > 0 ? filledProducts : (filledEquipments.length === 0 ? [{
+                groupHead: chosenGroupHead,
+                productName: chosenProduct,
+                quantity: 100,
+                minStockQty: stockVal,
+                uom: chosenUom,
+                areaOfUse: chosenArea,
+                expectedRequirementDate: expectedDateStr,
+                attachment: undefined,
+                specifications: 'Standard project site execution requirement',
+            }] : []),
+            equipments: filledEquipments,
         });
 
         toast.success('Test entries filled with valid data!');
@@ -842,6 +952,17 @@ export default () => {
                 }
             }
             toast.error('Please check required product fields');
+        } else if (topErrorKey === 'equipments' && Array.isArray(errors.equipments)) {
+            for (const eqErr of errors.equipments) {
+                if (eqErr) {
+                    const firstMsg = Object.values(eqErr)[0] as any;
+                    if (firstMsg?.message) {
+                        toast.error(firstMsg.message);
+                        return;
+                    }
+                }
+            }
+            toast.error('Please check required equipment fields');
         } else if (errors[topErrorKey]?.message) {
             toast.error(errors[topErrorKey].message);
         } else {
@@ -1241,7 +1362,7 @@ export default () => {
                                             <span className="text-xs font-bold text-indigo-700 uppercase tracking-wider">
                                                 Item #{index + 1}
                                             </span>
-                                            {fields.length > 1 && (
+                                            {(fields.length > 1 || equipmentFields.length > 0) && (
                                                 <button
                                                     type="button"
                                                     onClick={() => remove(index)}
@@ -1585,8 +1706,250 @@ export default () => {
                                 );
                             })}
 
-                            {/* Add Product Button at the Bottom */}
-                            <div className="pt-1 flex items-center justify-start">
+                            {/* Equipment Form Blocks */}
+                            {equipmentFields.map((field, eqIndex) => {
+                                const defaultGroupHeads = [
+                                    'Pipes & Fittings',
+                                    'Civil Materials',
+                                    'Electrical & Instrumentation',
+                                    'Valves & Actuators',
+                                    'Hardware & Consumables',
+                                    'Pumps & Motors'
+                                ];
+                                const groupHeadOptions = (options?.allGroupHeads && options.allGroupHeads.length > 0)
+                                    ? options.allGroupHeads
+                                    : defaultGroupHeads;
+
+                                const defaultAreaOfUses = [
+                                    'Main Pipeline Section',
+                                    'Water Treatment Plant',
+                                    'Electrical Substation',
+                                    'Distribution Canal Network',
+                                    'Pumping Station',
+                                    'Storage Yard'
+                                ];
+                                const areaOfUseOptions = (options?.areaOfUses && options.areaOfUses.length > 0)
+                                    ? options.areaOfUses
+                                    : defaultAreaOfUses;
+
+                                const currentType = form.watch(`equipments.${eqIndex}.type`);
+
+                                return (
+                                    <div
+                                        key={field.id}
+                                        className="flex flex-col gap-3 border border-amber-200 bg-amber-50/30 p-3.5 rounded-lg shadow-2xs"
+                                    >
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-xs font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+                                                <Wrench size={13} className="text-amber-600" />
+                                                Equipment #{eqIndex + 1}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => removeEquipment(eqIndex)}
+                                                className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition cursor-pointer"
+                                                title="Remove equipment"
+                                            >
+                                                <Trash size={14} />
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <FormField
+                                                control={form.control}
+                                                name={`equipments.${eqIndex}.groupHead`}
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel className="text-xs font-medium text-gray-700">
+                                                            Group Head <span className="text-destructive">*</span>
+                                                        </FormLabel>
+                                                        <Select onValueChange={field.onChange} value={field.value}>
+                                                            <FormControl>
+                                                                <SelectTrigger className="w-full h-8.5 bg-white text-xs">
+                                                                    <SelectValue placeholder="Select group head" />
+                                                                </SelectTrigger>
+                                                            </FormControl>
+                                                            <SelectContent>
+                                                                <div
+                                                                    className="flex items-center border-b border-slate-200 px-2.5 py-1.5 sticky top-0 bg-white z-10"
+                                                                    onPointerDown={(e) => e.stopPropagation()}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                >
+                                                                    <Search className="mr-2 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                                                    <input
+                                                                        placeholder="Search group head..."
+                                                                        value={searchTermEqGroupHeadByRow[eqIndex] || ''}
+                                                                        onChange={(e) =>
+                                                                            setSearchTermEqGroupHeadByRow(prev => ({
+                                                                                ...prev,
+                                                                                [eqIndex]: e.target.value
+                                                                            }))
+                                                                        }
+                                                                        onKeyDown={(e) => e.stopPropagation()}
+                                                                        className="flex h-7 w-full rounded-md border-0 bg-transparent py-1 text-xs outline-none placeholder:text-slate-400"
+                                                                    />
+                                                                </div>
+                                                                {groupHeadOptions
+                                                                    .filter((gh) =>
+                                                                        gh.toLowerCase().includes((searchTermEqGroupHeadByRow[eqIndex] || '').toLowerCase())
+                                                                    )
+                                                                    .map((gh, i) => (
+                                                                        <SelectItem key={i} value={gh}>
+                                                                            {gh}
+                                                                        </SelectItem>
+                                                                    ))}
+                                                            </SelectContent>
+                                                        </Select>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name={`equipments.${eqIndex}.areaOfUse`}
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel className="text-xs font-medium text-gray-700">
+                                                            Area Of Use <span className="text-destructive">*</span>
+                                                        </FormLabel>
+                                                        <Select onValueChange={field.onChange} value={field.value}>
+                                                            <FormControl>
+                                                                <SelectTrigger className="w-full h-8.5 bg-white text-xs">
+                                                                    <SelectValue placeholder="Select Area of Use" />
+                                                                </SelectTrigger>
+                                                            </FormControl>
+                                                            <SelectContent>
+                                                                <div
+                                                                    className="flex items-center border-b border-slate-200 px-2.5 py-1.5 sticky top-0 bg-white z-10"
+                                                                    onPointerDown={(e) => e.stopPropagation()}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                >
+                                                                    <Search className="mr-2 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                                                    <input
+                                                                        placeholder="Search Area of Use..."
+                                                                        value={searchTermEqAreaOfUseByRow[eqIndex] || ''}
+                                                                        onChange={(e) => setSearchTermEqAreaOfUseByRow(prev => ({ ...prev, [eqIndex]: e.target.value }))}
+                                                                        onKeyDown={(e) => e.stopPropagation()}
+                                                                        className="flex h-7 w-full rounded-md border-0 bg-transparent py-1 text-xs outline-none placeholder:text-slate-400"
+                                                                    />
+                                                                </div>
+                                                                {areaOfUseOptions
+                                                                    .filter((area) =>
+                                                                        area.toLowerCase().includes((searchTermEqAreaOfUseByRow[eqIndex] || '').toLowerCase())
+                                                                    )
+                                                                    .map((area, i) => (
+                                                                        <SelectItem key={i} value={area}>
+                                                                            {area}
+                                                                        </SelectItem>
+                                                                    ))}
+                                                            </SelectContent>
+                                                        </Select>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <FormField
+                                                control={form.control}
+                                                name={`equipments.${eqIndex}.equipmentName`}
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel className="text-xs font-medium text-gray-700">
+                                                            Equipment Name <span className="text-destructive">*</span>
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input
+                                                                placeholder="e.g. Vehicles, Crane, Excavator, Dump Truck"
+                                                                className="h-8.5 bg-white text-xs"
+                                                                {...field}
+                                                            />
+                                                        </FormControl>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name={`equipments.${eqIndex}.type`}
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel className="text-xs font-medium text-gray-700">
+                                                            Type <span className="text-destructive">*</span>
+                                                        </FormLabel>
+                                                        <Select onValueChange={field.onChange} value={field.value}>
+                                                            <FormControl>
+                                                                <SelectTrigger className="w-full h-8.5 bg-white text-xs">
+                                                                    <SelectValue placeholder="Select Type (Rent or Owned)" />
+                                                                </SelectTrigger>
+                                                            </FormControl>
+                                                            <SelectContent>
+                                                                <SelectItem value="Rent">Rent</SelectItem>
+                                                                <SelectItem value="Owned">Owned</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </div>
+
+                                        {/* Extra fields if Type is Rent */}
+                                        {currentType === 'Rent' && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-2.5 bg-amber-100/40 rounded-md border border-amber-200">
+                                                <FormField
+                                                    control={form.control}
+                                                    name={`equipments.${eqIndex}.expectedTime`}
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel className="text-xs font-medium text-gray-700">
+                                                                Expected Time <span className="text-destructive">*</span>
+                                                            </FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    placeholder="e.g. 15 Days, 1 Month, 8 Hours"
+                                                                    className="h-8.5 bg-white text-xs"
+                                                                    {...field}
+                                                                />
+                                                            </FormControl>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+
+                                                <FormField
+                                                    control={form.control}
+                                                    name={`equipments.${eqIndex}.dayCharge`}
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel className="text-xs font-medium text-gray-700">
+                                                                Day Charge (₹) <span className="text-destructive">*</span>
+                                                            </FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    type="number"
+                                                                    step="any"
+                                                                    placeholder="Enter Day Charge"
+                                                                    className="h-8.5 bg-white text-xs"
+                                                                    {...field}
+                                                                    value={field.value !== undefined && field.value !== null ? String(field.value) : ''}
+                                                                />
+                                                            </FormControl>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+
+                            {/* Add Product and Add Equipment Buttons at the Bottom */}
+                            <div className="pt-1 flex items-center justify-start gap-2.5">
                                 <Button
                                     type="button"
                                     variant="outline"
@@ -1608,6 +1971,26 @@ export default () => {
                                 >
                                     <Plus size={15} />
                                     <span>Add Product</span>
+                                </Button>
+
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                        appendEquipment({
+                                            groupHead: '',
+                                            areaOfUse: '',
+                                            equipmentName: '',
+                                            type: 'Rent',
+                                            expectedTime: '',
+                                            dayCharge: '' as any,
+                                        })
+                                    }
+                                    className="h-8.5 px-3.5 text-xs bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100 flex items-center gap-1.5 font-semibold cursor-pointer shadow-xs"
+                                >
+                                    <Plus size={15} />
+                                    <span>Add Equipment</span>
                                 </Button>
                             </div>
                         </div>

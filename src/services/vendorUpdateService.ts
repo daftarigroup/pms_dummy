@@ -351,6 +351,8 @@ export async function updateVendorRateThreeParty(
         quotation_date1: string;
         delivery_time1: string;
         make1: string;
+        unit1?: string;
+        rate_unit1?: string;
         // Vendor 2
         vendor_name2: string;
         select_rate_type2: string;
@@ -365,6 +367,8 @@ export async function updateVendorRateThreeParty(
         quotation_date2: string;
         delivery_time2: string;
         make2: string;
+        unit2?: string;
+        rate_unit2?: string;
         // Vendor 3
         vendor_name3: string;
         select_rate_type3: string;
@@ -379,6 +383,8 @@ export async function updateVendorRateThreeParty(
         quotation_date3: string;
         delivery_time3: string;
         make3: string;
+        unit3?: string;
+        rate_unit3?: string;
         // Other
         comparison_sheet: string;
         product_code: string;

@@ -382,7 +382,7 @@ export default function UploadDesignPage({ embedded = false }) {
 
           <button
             onClick={handleClearFilters}
-            className="flex items-center justify-center gap-1 border border-gray-300 rounded-lg md:rounded hover:bg-gray-100 text-gray-600 transition h-[32px] md:h-[38px] px-3 flex-shrink-0"
+            className="flex items-center justify-center gap-1 border border-gray-300 rounded-lg md:rounded hover:bg-gray-100 text-gray-600 transition h-[32px] md:h-[38px] px-3 flex-shrink-0 cursor-pointer"
             title="Clear filters"
           >
             <RotateCcw size={14} />

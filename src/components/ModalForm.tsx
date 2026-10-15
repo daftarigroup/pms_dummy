@@ -17,7 +17,8 @@ const ModalForm = ({
   cancelText = 'Cancel',
   maxWidth = 'max-w-2xl',
   zIndex = 'z-[100]',
-  extraFooterAction = null
+  extraFooterAction = null,
+  secondarySubmitButton = null
 }) => {
   if (!isOpen) return null;
 
@@ -64,6 +65,7 @@ const ModalForm = ({
             className="w-full"
             formId="ultra-compact-form"
             extraButton={extraFooterAction}
+            secondarySubmitButton={secondarySubmitButton}
           />
         </div>
       </div>

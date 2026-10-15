@@ -577,6 +577,8 @@ export default () => {
                         z.number().optional()
                     ),
                     make: z.string().optional(),
+                    unit: z.string().optional(),
+                    customUnit: z.string().optional(),
                 })
             )
             .length(3)
@@ -675,6 +677,8 @@ export default () => {
                     quotationDate: '',
                     deliveryTime: 0,
                     make: '',
+                    unit: '',
+                    customUnit: '',
                 },
                 {
                     vendorName: '',
@@ -688,6 +692,8 @@ export default () => {
                     quotationDate: '',
                     deliveryTime: 0,
                     make: '',
+                    unit: '',
+                    customUnit: '',
                 },
                 {
                     vendorName: '',
@@ -701,6 +707,8 @@ export default () => {
                     quotationDate: '',
                     deliveryTime: 0,
                     make: '',
+                    unit: '',
+                    customUnit: '',
                 },
             ],
         },
@@ -826,10 +834,12 @@ export default () => {
                 const rateTypeText = 'Basic Rate';
                 let withTaxOrNot = 'No';
                 let taxValue = vendor.gstPercent || 0;
+                const resolvedUnit = vendor.unit === 'Custom' ? (vendor.customUnit || 'Custom') : (vendor.unit || '');
 
                 return {
                     rateType: rateTypeText,
                     rate: vendor.rate || 0,
+                    unit: resolvedUnit,
                     withTaxOrNot,
                     taxValue,
                     advancePercent: vendor.advancePercent?.toString() || '0',
@@ -852,6 +862,8 @@ export default () => {
                 vendor_name1: values.vendors[0].vendorName || '',
                 select_rate_type1: vendor1Data.rateType,
                 rate1: vendor1Data.rate.toString(),
+                unit1: vendor1Data.unit,
+                rate_unit1: vendor1Data.unit,
                 with_tax_or_not1: vendor1Data.withTaxOrNot,
                 tax_value1: vendor1Data.taxValue.toString(),
                 payment_term1: values.vendors[0].paymentTerm || '',
@@ -867,6 +879,8 @@ export default () => {
                 vendor_name2: values.vendors[1].vendorName || '',
                 select_rate_type2: vendor2Data.rateType,
                 rate2: vendor2Data.rate.toString(),
+                unit2: vendor2Data.unit,
+                rate_unit2: vendor2Data.unit,
                 with_tax_or_not2: vendor2Data.withTaxOrNot,
                 tax_value2: vendor2Data.taxValue.toString(),
                 payment_term2: values.vendors[1].paymentTerm || '',
@@ -882,6 +896,8 @@ export default () => {
                 vendor_name3: values.vendors[2].vendorName || '',
                 select_rate_type3: vendor3Data.rateType,
                 rate3: vendor3Data.rate.toString(),
+                unit3: vendor3Data.unit,
+                rate_unit3: vendor3Data.unit,
                 with_tax_or_not3: vendor3Data.withTaxOrNot,
                 tax_value3: vendor3Data.taxValue.toString(),
                 payment_term3: values.vendors[2].paymentTerm || '',
@@ -1014,6 +1030,8 @@ export default () => {
                     emailId: 'vendor1@gmail.com',
                     deliveryTime: 5,
                     make: 'Tata Steel',
+                    unit: 'Per Month',
+                    customUnit: '',
                 },
                 {
                     vendorName: v2Name,
@@ -1027,6 +1045,8 @@ export default () => {
                     emailId: 'vendor2@gmail.com',
                     deliveryTime: 7,
                     make: 'Jindal Steel',
+                    unit: 'Per Month',
+                    customUnit: '',
                 },
                 {
                     vendorName: v3Name,
@@ -1040,6 +1060,8 @@ export default () => {
                     emailId: 'vendor3@gmail.com',
                     deliveryTime: 10,
                     make: 'Sail Steel',
+                    unit: 'Per Month',
+                    customUnit: '',
                 },
             ],
         });
@@ -1308,7 +1330,7 @@ export default () => {
                                                     Regular Vendor
                                                 </SelectItem>
                                                 <SelectItem value="Three Party">
-                                                    Three Party (3 Party)
+                                                    Multiple Vendor
                                                 </SelectItem>
                                             </SelectContent>
                                         </Select>
@@ -1648,7 +1670,7 @@ export default () => {
                             >
                                 <DialogHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
                                     <div>
-                                        <DialogTitle>Step 2: Update Three Party Vendors</DialogTitle>
+                                        <DialogTitle>Step 2: Update Multiple Vendors</DialogTitle>
                                         <DialogDescription>
                                             Update vendors for indent{' '}
                                             <span className="font-medium">
@@ -1827,7 +1849,7 @@ export default () => {
                                                     />
                                                 </div>
 
-                                                <div className="grid grid-cols-2 gap-4">
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                     <FormField
                                                         control={threePartyForm.control}
                                                         name={`vendors.${index}.rate`}
@@ -1837,6 +1859,7 @@ export default () => {
                                                                 <FormControl>
                                                                     <Input
                                                                         type="number"
+                                                                        placeholder="Enter basic rate"
                                                                         {...field}
                                                                     />
                                                                 </FormControl>
@@ -1847,37 +1870,26 @@ export default () => {
 
                                                     <FormField
                                                         control={threePartyForm.control}
-                                                        name={`vendors.${index}.gstPercent`}
+                                                        name={`vendors.${index}.unit`}
                                                         render={({ field }) => (
                                                             <FormItem>
-                                                                <FormLabel>GST %</FormLabel>
+                                                                <FormLabel>Unit</FormLabel>
                                                                 <Select
-                                                                    onValueChange={(val) =>
-                                                                        field.onChange(Number(val))
-                                                                    }
-                                                                    value={field.value?.toString()}
+                                                                    onValueChange={field.onChange}
+                                                                    value={field.value}
                                                                 >
                                                                     <FormControl>
                                                                         <SelectTrigger>
-                                                                            <SelectValue placeholder="Select GST %" />
+                                                                            <SelectValue placeholder="Select Unit" />
                                                                         </SelectTrigger>
                                                                     </FormControl>
                                                                     <SelectContent>
-                                                                        <SelectItem value="0">
-                                                                            0%
-                                                                        </SelectItem>
-                                                                        <SelectItem value="5">
-                                                                            5%
-                                                                        </SelectItem>
-                                                                        <SelectItem value="12">
-                                                                            12%
-                                                                        </SelectItem>
-                                                                        <SelectItem value="18">
-                                                                            18%
-                                                                        </SelectItem>
-                                                                        <SelectItem value="28">
-                                                                            28%
-                                                                        </SelectItem>
+                                                                        <SelectItem value="Per Hour">Per Hour</SelectItem>
+                                                                        <SelectItem value="One Time">One Time</SelectItem>
+                                                                        <SelectItem value="Per Week">Per Week</SelectItem>
+                                                                        <SelectItem value="Per Day">Per Day</SelectItem>
+                                                                        <SelectItem value="Per Month">Per Month</SelectItem>
+                                                                        <SelectItem value="Custom">Custom</SelectItem>
                                                                     </SelectContent>
                                                                 </Select>
                                                                 <FormMessage />
@@ -1885,6 +1897,65 @@ export default () => {
                                                         )}
                                                     />
                                                 </div>
+
+                                                {threePartyForm.watch(`vendors.${index}.unit`) === 'Custom' && (
+                                                    <FormField
+                                                        control={threePartyForm.control}
+                                                        name={`vendors.${index}.customUnit`}
+                                                        render={({ field }) => (
+                                                            <FormItem>
+                                                                <FormLabel>Custom Unit</FormLabel>
+                                                                <FormControl>
+                                                                    <Input
+                                                                        placeholder="Type custom unit (e.g. Per Trip, Per Meter)"
+                                                                        {...field}
+                                                                    />
+                                                                </FormControl>
+                                                                <FormMessage />
+                                                            </FormItem>
+                                                        )}
+                                                    />
+                                                )}
+
+                                                <FormField
+                                                    control={threePartyForm.control}
+                                                    name={`vendors.${index}.gstPercent`}
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel>GST %</FormLabel>
+                                                            <Select
+                                                                onValueChange={(val) =>
+                                                                    field.onChange(Number(val))
+                                                                }
+                                                                value={field.value?.toString()}
+                                                            >
+                                                                <FormControl>
+                                                                    <SelectTrigger>
+                                                                        <SelectValue placeholder="Select GST %" />
+                                                                    </SelectTrigger>
+                                                                </FormControl>
+                                                                <SelectContent>
+                                                                    <SelectItem value="0">
+                                                                        0%
+                                                                    </SelectItem>
+                                                                    <SelectItem value="5">
+                                                                        5%
+                                                                    </SelectItem>
+                                                                    <SelectItem value="12">
+                                                                        12%
+                                                                    </SelectItem>
+                                                                    <SelectItem value="18">
+                                                                        18%
+                                                                    </SelectItem>
+                                                                    <SelectItem value="28">
+                                                                        28%
+                                                                    </SelectItem>
+                                                                </SelectContent>
+                                                            </Select>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
 
                                                 <FormField
                                                     control={threePartyForm.control}
