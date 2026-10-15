@@ -174,21 +174,3 @@ export function runFinalComparativeAcceptanceTests(): TestResult[] {
 
   return results;
 }
-
-// When run directly from CLI
-if (typeof require !== 'undefined' && require.main === module) {
-  const testResults = runFinalComparativeAcceptanceTests();
-  console.log('\n=== FINAL COMPARATIVE ACCEPTANCE TEST RESULTS ===');
-  let allOk = true;
-  testResults.forEach(r => {
-    console.log(`${r.passed ? '✅ PASS' : '❌ FAIL'}: ${r.name}`);
-    if (!r.passed) {
-      allOk = false;
-      console.log('  Actual:', r.actual);
-      console.log('  Expected:', r.expected);
-      if (r.error) console.log('  Error:', r.error);
-    }
-  });
-  console.log('================================================\n');
-  process.exit(allOk ? 0 : 1);
-}
