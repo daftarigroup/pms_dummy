@@ -108,11 +108,6 @@ export default function RM1() {
     });
   }, [currentList, searchQuery]);
 
-  const handleSubmitBill = (billId: string, updates: any) => {
-    updateRMBill(billId, updates);
-    refresh();
-    setSelectedBillForModal(null);
-  };
 
   const handleDeleteBill = (id: string) => {
     if (!window.confirm('Delete this bill record?')) return;

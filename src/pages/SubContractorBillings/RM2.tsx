@@ -33,6 +33,7 @@ import {
   getExternalPurchaseOrders
 } from '../../utils/storageManager';
 import { buildChainageDiffMap } from '../../utils/helpers';
+import { computeBillFromExecutionEntries } from '../DepartmentBilling/dynamicBillCalculator';
 import BackToBackReconciliation from './BackToBackReconciliation';
 
 const formatCurrency = (val: number) => {
@@ -158,11 +159,6 @@ export default function RM2() {
     });
   }, [currentList, searchQuery]);
 
-  const handleSubmitBill = (billId: string, updates: any) => {
-    updateRMBill(billId, updates);
-    refresh();
-    setSelectedBillForModal(null);
-  };
 
   const handleDeleteBill = (id: string) => {
     if (!window.confirm('Delete this Sub-Contractor payment voucher record?')) return;
