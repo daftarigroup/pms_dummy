@@ -109,7 +109,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, collapsed, onToggleC
       return location.pathname === '/upload-drawing';
     }
     if (path === '/rm1') {
-      if (location.pathname.startsWith('/rm1')) return true;
+      if (location.pathname.startsWith('/rm1') || location.pathname.startsWith('/department-billing')) return true;
       if (location.pathname.startsWith('/rm-bill/')) {
         const billId = decodeURIComponent(location.pathname.split('/rm-bill/')[1] || '');
         const bill = (getRMBills() || []).find((b: any) => b.id === billId);
@@ -117,7 +117,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, collapsed, onToggleC
       }
     }
     if (path === '/rm2') {
-      if (location.pathname.startsWith('/rm2')) return true;
+      if (location.pathname.startsWith('/rm2') || location.pathname.startsWith('/subcontractor-billing')) return true;
       if (location.pathname.startsWith('/rm-bill/')) {
         const billId = decodeURIComponent(location.pathname.split('/rm-bill/')[1] || '');
         const bill = (getRMBills() || []).find((b: any) => b.id === billId);

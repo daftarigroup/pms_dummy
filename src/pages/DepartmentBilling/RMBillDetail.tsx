@@ -5,7 +5,6 @@ import { ArrowLeft, Building2, Tag, User, Layers, Receipt } from 'lucide-react';
 import { getRMBills, updateRMBill, getExecutions, getActuals } from '../../utils/storageManager';
 import { buildChainageDiffMap } from '../../utils/helpers';
 import { MEASURE_COLUMNS, displayVal, formatDate, billHomePath } from './rmUtils';
-import GenerateBillModal from './GenerateBillModal';
 
 // Full page for one RM bill's line items - reached by clicking a row in RM1 (Department
 // Billing, Execution-type bills) or RM2 (Sub Contractor Billings, Actual-type bills).
@@ -17,7 +16,6 @@ export default function RMBillDetail() {
   const [bill, setBill] = useState(null);
   const [entries, setEntries] = useState([]);
   const [selectedEditIds, setSelectedEditIds] = useState([]);
-  const [showBillModal, setShowBillModal] = useState(false);
 
   const load = () => {
     const found = getRMBills().find(b => b.id === decodeURIComponent(billId || ''));
@@ -72,12 +70,6 @@ export default function RMBillDetail() {
     }
     setSelectedEditIds([]);
     toast.success('Changes saved successfully');
-  };
-
-  const handleSubmitBill = (id, fields) => {
-    updateRMBill(id, { status: 'billed', entries, ...fields });
-    toast.success('Bill generated');
-    load();
   };
 
   const backTo = bill ? billHomePath(bill) : '/rm1';
@@ -147,10 +139,10 @@ export default function RMBillDetail() {
               Save Changes
             </button>
             <button
-              onClick={() => setShowBillModal(true)}
+              onClick={() => navigate(bill.billType === 'Actual' ? `/subcontractor-billing/bill/${encodeURIComponent(bill.id)}` : `/department-billing/bill/${encodeURIComponent(bill.id)}`)}
               className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs md:text-sm font-semibold px-4 py-1.5 rounded-lg h-[32px] md:h-[38px] flex-shrink-0"
             >
-              <Receipt size={14} /> Generate Bill
+              <Receipt size={14} /> Calculate & Generate Bill
             </button>
           </div>
         )}
@@ -333,13 +325,6 @@ export default function RMBillDetail() {
         </table>
       </div>
 
-      <GenerateBillModal
-        isOpen={showBillModal}
-        onClose={() => setShowBillModal(false)}
-        bill={bill}
-        onSubmitBill={handleSubmitBill}
-        mode={bill?.billType === 'Actual' ? 'SUBCONTRACTOR' : 'DEPARTMENT'}
-      />
     </div>
   );
 }

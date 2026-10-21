@@ -1,17 +1,16 @@
 // Dynamic Bill Calculator
 // Computes bill quantities and amounts directly from entries sent from Execution Details / Actual Details
-// Implements Table 1 logic: Qty x Rate = Amount
+// Strictly follows Table 1 Logic: Qty x Rate = Amount
 // - Department Billing: Rates from Schedule - B Report
 // - Sub-Contractor Billing: Rates from Purchase Order (PO)
+// No artificial statutory or commercial deductions (pure Table 1 calculation)
 
 import { buildChainageDiffMap } from '../../utils/helpers';
 import { getExecutions, getActuals } from '../../utils/storageManager';
 import {
   getScheduleBRate,
   getPORate,
-  resolvePoNumberForProject,
-  STANDARD_TABLE1_EARTHWORK_RATES,
-  STANDARD_TABLE1_VALVE_RATES
+  resolvePoNumberForProject
 } from './table1RateMaster';
 
 export interface CalculatedBillLineItem {
@@ -22,14 +21,12 @@ export interface CalculatedBillLineItem {
   pipeDia?: number;
   unit: string;
   rate: number;
-  rateSource: string; // e.g. "Schedule - B Report (Item No 7.1)" or "PO #STORE-PO-25-26/01"
+  rateSource: string; // e.g. "Schedule - B Report (Item No 1)" or "PO #..."
   quantity: number;
   amount: number;
   deptRate?: number;
   deptAmount?: number;
   margin?: number;
-  deptCertifiedQty?: number;
-  isOverClaim?: boolean;
 }
 
 export interface DynamicBillOptions {
@@ -37,19 +34,6 @@ export interface DynamicBillOptions {
   poNumber?: string;
   subContractorName?: string;
   overrideRates?: Record<string, number>;
-  deductionConfig?: {
-    // Statutory (Department)
-    securityDepositPct?: number;
-    tdsPct?: number;
-    gstTdsPct?: number;
-    labourCessPct?: number;
-    // Commercial (Sub-Contractor)
-    retentionPct?: number;
-    materialIssuesRecovery?: number;
-    advanceRecoveryPct?: number;
-    dieselCharges?: number;
-    otherDebits?: number;
-  };
 }
 
 export interface DynamicBillBreakdown {
@@ -57,33 +41,14 @@ export interface DynamicBillBreakdown {
   poNumber?: string;
   subContractorName?: string;
   lineItems: CalculatedBillLineItem[];
+  totalAmount: number;
   grossAmount: number;
+  netPayable: number;
   totalLengthMeters: number;
   pipeDiaBreakdown: Record<string, { length: number; rate: number; amount: number; rateSource: string }>;
   deductions: {
-    type: 'DEPARTMENT' | 'SUBCONTRACTOR';
-    // Statutory
-    securityDepositPct?: number;
-    securityDeposit?: number;
-    tdsPct?: number;
-    tdsAmount?: number;
-    gstTdsPct?: number;
-    gstTdsAmount?: number;
-    labourCessPct?: number;
-    labourCess?: number;
-    royaltyAmount?: number;
-    // Commercial
-    retentionPct?: number;
-    retentionAmount?: number;
-    materialIssuesRecovery?: number;
-    advanceRecoveryPct?: number;
-    advanceRecovery?: number;
-    dieselCharges?: number;
-    otherDebits?: number;
-    // Total
     totalDeductions: number;
   };
-  netPayable: number;
   deptEquivalentGross?: number;
   contractorMargin?: number;
   contractorMarginPct?: number;
@@ -91,23 +56,19 @@ export interface DynamicBillBreakdown {
 
 export function computeBillFromExecutionEntries(
   bill: any,
-  overrideRatesOrOptions: Record<string, number> | DynamicBillOptions = {},
-  legacyDeductionConfig: any = {}
+  overrideRatesOrOptions: Record<string, number> | DynamicBillOptions = {}
 ): DynamicBillBreakdown {
-  // Normalize options vs legacy arguments
   let rateMode: 'SCHEDULE_B' | 'PO';
   let poNumber: string | undefined;
   let subContractorName: string | undefined;
   let overrideRates: Record<string, number> = {};
-  let deductionsIn: any = {};
 
   const isOptionsObject =
     typeof overrideRatesOrOptions === 'object' &&
     overrideRatesOrOptions !== null &&
     ('rateMode' in overrideRatesOrOptions ||
       'poNumber' in overrideRatesOrOptions ||
-      'overrideRates' in overrideRatesOrOptions ||
-      'deductionConfig' in overrideRatesOrOptions);
+      'overrideRates' in overrideRatesOrOptions);
 
   if (isOptionsObject) {
     const opts = overrideRatesOrOptions as DynamicBillOptions;
@@ -115,10 +76,8 @@ export function computeBillFromExecutionEntries(
     poNumber = opts.poNumber;
     subContractorName = opts.subContractorName;
     overrideRates = opts.overrideRates || {};
-    deductionsIn = opts.deductionConfig || {};
   } else {
     overrideRates = (overrideRatesOrOptions as Record<string, number>) || {};
-    deductionsIn = legacyDeductionConfig || {};
     rateMode = bill?.billType === 'Actual' ? 'PO' : 'SCHEDULE_B';
   }
 
@@ -139,19 +98,6 @@ export function computeBillFromExecutionEntries(
     ''
   ).trim();
 
-  // Deductions parameters
-  const securityDepositPct = deductionsIn.securityDepositPct ?? 5;
-  const deptTdsPct = deductionsIn.tdsPct ?? 2;
-  const gstTdsPct = deductionsIn.gstTdsPct ?? 2;
-  const labourCessPct = deductionsIn.labourCessPct ?? 1;
-
-  const retentionPct = deductionsIn.retentionPct ?? 5;
-  const subTdsPct = deductionsIn.tdsPct ?? 1; // 194C
-  const advanceRecoveryPct = deductionsIn.advanceRecoveryPct ?? 0;
-  const materialIssuesRecovery = Number(deductionsIn.materialIssuesRecovery) || 0;
-  const dieselCharges = Number(deductionsIn.dieselCharges) || 0;
-  const otherDebits = Number(deductionsIn.otherDebits) || 0;
-
   const entries = bill?.entries || [];
   if (entries.length === 0) {
     return {
@@ -159,30 +105,12 @@ export function computeBillFromExecutionEntries(
       poNumber: effectivePoNumber || undefined,
       subContractorName: effectiveSubContractor || undefined,
       lineItems: [],
+      totalAmount: 0,
       grossAmount: 0,
+      netPayable: 0,
       totalLengthMeters: 0,
       pipeDiaBreakdown: {},
-      deductions: {
-        type: isPO ? 'SUBCONTRACTOR' : 'DEPARTMENT',
-        securityDepositPct,
-        securityDeposit: 0,
-        tdsPct: isPO ? subTdsPct : deptTdsPct,
-        tdsAmount: 0,
-        gstTdsPct,
-        gstTdsAmount: 0,
-        labourCessPct,
-        labourCess: 0,
-        royaltyAmount: 0,
-        retentionPct,
-        retentionAmount: 0,
-        materialIssuesRecovery,
-        advanceRecoveryPct,
-        advanceRecovery: 0,
-        dieselCharges,
-        otherDebits,
-        totalDeductions: 0
-      },
-      netPayable: 0,
+      deductions: { totalDeductions: 0 },
       deptEquivalentGross: 0,
       contractorMargin: 0,
       contractorMarginPct: 0
@@ -238,7 +166,7 @@ export function computeBillFromExecutionEntries(
 
   const lineItems: CalculatedBillLineItem[] = [];
   const pipeDiaBreakdown: Record<string, { length: number; rate: number; amount: number; rateSource: string }> = {};
-  let grossAmount = 0;
+  let totalAmount = 0;
   let deptEquivalentGross = 0;
 
   // 3. Add Pipe Laying Line Items
@@ -246,12 +174,12 @@ export function computeBillFromExecutionEntries(
   sortedDias.forEach(dia => {
     const length = parseFloat(pipeDiaMap[dia].length.toFixed(3));
 
-    // Resolve rate: Schedule B vs PO
+    // Resolve rate: Schedule B for Department, PO for Sub-Contractor
     const resolved = isPO
       ? getPORate('pipe', dia, bill.projectNo, effectivePoNumber, effectiveSubContractor)
       : getScheduleBRate('pipe', dia, bill.projectNo);
 
-    // Calculate department equivalent rate for margin analysis
+    // Calculate department equivalent rate for reference
     const deptResolved = getScheduleBRate('pipe', dia, bill.projectNo);
     const deptRate = deptResolved.rate;
     const deptAmt = parseFloat((length * deptRate).toFixed(2));
@@ -260,7 +188,7 @@ export function computeBillFromExecutionEntries(
     const rate = overrideRates[`pipe_${dia}`] !== undefined ? overrideRates[`pipe_${dia}`] : resolved.rate;
     const amount = parseFloat((length * rate).toFixed(2));
 
-    grossAmount += amount;
+    totalAmount += amount;
     pipeDiaBreakdown[String(dia)] = { length, rate, amount, rateSource: resolved.source };
 
     lineItems.push({
@@ -294,7 +222,7 @@ export function computeBillFromExecutionEntries(
     const excAmt = parseFloat((excQty * excRate).toFixed(2));
     const excDeptAmt = parseFloat((excQty * excDeptResolved.rate).toFixed(2));
 
-    grossAmount += excAmt;
+    totalAmount += excAmt;
     deptEquivalentGross += excDeptAmt;
 
     lineItems.push({
@@ -322,7 +250,7 @@ export function computeBillFromExecutionEntries(
     const murumAmt = parseFloat((murumQty * murumRate).toFixed(2));
     const murumDeptAmt = parseFloat((murumQty * murumDeptResolved.rate).toFixed(2));
 
-    grossAmount += murumAmt;
+    totalAmount += murumAmt;
     deptEquivalentGross += murumDeptAmt;
 
     lineItems.push({
@@ -350,7 +278,7 @@ export function computeBillFromExecutionEntries(
     const backfillAmt = parseFloat((backfillQty * backfillRate).toFixed(2));
     const backfillDeptAmt = parseFloat((backfillQty * backfillDeptResolved.rate).toFixed(2));
 
-    grossAmount += backfillAmt;
+    totalAmount += backfillAmt;
     deptEquivalentGross += backfillDeptAmt;
 
     lineItems.push({
@@ -379,7 +307,7 @@ export function computeBillFromExecutionEntries(
     const valveAmt = totalValvesCount * valveRate;
     const valveDeptAmt = totalValvesCount * valveDeptResolved.rate;
 
-    grossAmount += valveAmt;
+    totalAmount += valveAmt;
     deptEquivalentGross += valveDeptAmt;
 
     lineItems.push({
@@ -398,52 +326,8 @@ export function computeBillFromExecutionEntries(
     });
   }
 
-  // 6. Compute Deductions based on Mode (Department Statutory vs Sub-Contractor Commercial)
-  let totalDeductions = 0;
-  let netPayable = 0;
-
-  let securityDeposit = 0;
-  let deptTdsAmount = 0;
-  let gstTdsAmount = 0;
-  let labourCess = 0;
-  let royaltyAmount = 0;
-
-  let retentionAmount = 0;
-  let subTdsAmount = 0;
-  let advanceRecovery = 0;
-
-  if (isPO) {
-    // Sub-Contractor Commercial Deductions
-    retentionAmount = parseFloat(((grossAmount * retentionPct) / 100).toFixed(2));
-    subTdsAmount = parseFloat(((grossAmount * subTdsPct) / 100).toFixed(2));
-    advanceRecovery = parseFloat(((grossAmount * advanceRecoveryPct) / 100).toFixed(2));
-
-    totalDeductions = parseFloat(
-      (
-        retentionAmount +
-        subTdsAmount +
-        advanceRecovery +
-        materialIssuesRecovery +
-        dieselCharges +
-        otherDebits
-      ).toFixed(2)
-    );
-    netPayable = Math.max(0, parseFloat((grossAmount - totalDeductions).toFixed(2)));
-  } else {
-    // Department Statutory Deductions
-    securityDeposit = parseFloat(((grossAmount * securityDepositPct) / 100).toFixed(2));
-    deptTdsAmount = parseFloat(((grossAmount * deptTdsPct) / 100).toFixed(2));
-    gstTdsAmount = parseFloat(((grossAmount * gstTdsPct) / 100).toFixed(2));
-    labourCess = parseFloat(((grossAmount * labourCessPct) / 100).toFixed(2));
-    royaltyAmount = parseFloat((totalMurumCum * 141.43).toFixed(2));
-
-    totalDeductions = parseFloat(
-      (securityDeposit + deptTdsAmount + gstTdsAmount + labourCess + royaltyAmount).toFixed(2)
-    );
-    netPayable = Math.max(0, parseFloat((grossAmount - totalDeductions).toFixed(2)));
-  }
-
-  const contractorMargin = parseFloat((deptEquivalentGross - grossAmount).toFixed(2));
+  const finalTotal = parseFloat(totalAmount.toFixed(2));
+  const contractorMargin = parseFloat((deptEquivalentGross - finalTotal).toFixed(2));
   const contractorMarginPct =
     deptEquivalentGross > 0 ? parseFloat(((contractorMargin / deptEquivalentGross) * 100).toFixed(1)) : 0;
 
@@ -452,30 +336,12 @@ export function computeBillFromExecutionEntries(
     poNumber: effectivePoNumber || undefined,
     subContractorName: effectiveSubContractor || undefined,
     lineItems,
-    grossAmount: parseFloat(grossAmount.toFixed(2)),
+    totalAmount: finalTotal,
+    grossAmount: finalTotal,
+    netPayable: finalTotal,
     totalLengthMeters: parseFloat(totalLengthMeters.toFixed(3)),
     pipeDiaBreakdown,
-    deductions: {
-      type: isPO ? 'SUBCONTRACTOR' : 'DEPARTMENT',
-      securityDepositPct,
-      securityDeposit,
-      tdsPct: isPO ? subTdsPct : deptTdsPct,
-      tdsAmount: isPO ? subTdsAmount : deptTdsAmount,
-      gstTdsPct,
-      gstTdsAmount,
-      labourCessPct,
-      labourCess,
-      royaltyAmount,
-      retentionPct,
-      retentionAmount,
-      materialIssuesRecovery,
-      advanceRecoveryPct,
-      advanceRecovery,
-      dieselCharges,
-      otherDebits,
-      totalDeductions
-    },
-    netPayable: parseFloat(netPayable.toFixed(2)),
+    deductions: { totalDeductions: 0 },
     deptEquivalentGross: parseFloat(deptEquivalentGross.toFixed(2)),
     contractorMargin,
     contractorMarginPct

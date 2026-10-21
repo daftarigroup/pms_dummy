@@ -33,8 +33,6 @@ import {
   getExternalPurchaseOrders
 } from '../../utils/storageManager';
 import { buildChainageDiffMap } from '../../utils/helpers';
-import { computeBillFromExecutionEntries } from '../DepartmentBilling/dynamicBillCalculator';
-import GenerateBillModal from '../DepartmentBilling/GenerateBillModal';
 import BackToBackReconciliation from './BackToBackReconciliation';
 
 const formatCurrency = (val: number) => {
@@ -48,7 +46,6 @@ export default function RM2() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSubContractor, setSelectedSubContractor] = useState('');
   const [selectedMinor, setSelectedMinor] = useState('');
-  const [selectedBillForModal, setSelectedBillForModal] = useState<any | null>(null);
 
   // Real Bills and Projects
   const [bills, setBills] = useState<any[]>([]);
@@ -125,12 +122,10 @@ export default function RM2() {
           projOrMinor?.contractorName ||
           selectedSubContractor,
         poNumber: bill.poNumber || calc.poNumber,
-        liveGross: bill.status === 'billed' && bill.grossAmount ? bill.grossAmount : calc.grossAmount,
-        liveNet: bill.status === 'billed' && bill.billAmount ? bill.billAmount : calc.netPayable,
+        liveAmount: bill.status === 'billed' && bill.billAmount ? bill.billAmount : calc.totalAmount,
         liveLength: calc.totalLengthMeters,
         liveItemsCount: bill.entries?.length || 0,
         pipeDiaBreakdown: calc.pipeDiaBreakdown,
-        deductions: bill.deductions || calc.deductions,
         itemBreakdown: bill.itemBreakdown || calc.lineItems,
         contractorMargin: bill.contractorMargin !== undefined ? bill.contractorMargin : calc.contractorMargin,
         contractorMarginPct: bill.contractorMarginPct !== undefined ? bill.contractorMarginPct : calc.contractorMarginPct
@@ -162,12 +157,6 @@ export default function RM2() {
       );
     });
   }, [currentList, searchQuery]);
-
-  // Aggregate metrics
-  const totalPendingGross = pendingBills.reduce((sum, b) => sum + (b.liveGross || 0), 0);
-  const totalPendingNet = pendingBills.reduce((sum, b) => sum + (b.liveNet || 0), 0);
-  const totalCertifiedNet = billedHistory.reduce((sum, b) => sum + (b.liveNet || 0), 0);
-  const totalMarginSecured = billsWithCalculations.reduce((sum, b) => sum + (b.contractorMargin || 0), 0);
 
   const handleSubmitBill = (billId: string, updates: any) => {
     updateRMBill(billId, updates);
@@ -256,43 +245,9 @@ export default function RM2() {
         </table>
 
         <table class="summary-table">
-          <tr>
-            <td><strong>Sub Gross Work Done (PO Rates):</strong></td>
-            <td class="text-right"><strong>₹ ${Number(bill.liveGross || 0).toLocaleString('en-IN')}</strong></td>
-          </tr>
-          ${bill.deductions?.retentionAmount ? `
-          <tr>
-            <td>Retention Money (${bill.deductions?.retentionPct || 5}%):</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.retentionAmount).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.tdsAmount ? `
-          <tr>
-            <td>TDS u/s 194C (${bill.deductions?.tdsPct || 1}%):</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.tdsAmount).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.materialIssuesRecovery ? `
-          <tr>
-            <td>Material Recovery (Pipes/Fittings):</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.materialIssuesRecovery).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.advanceRecovery ? `
-          <tr>
-            <td>Mobilization Advance Recovery:</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.advanceRecovery).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.dieselCharges ? `
-          <tr>
-            <td>Machinery / Diesel Debits:</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.dieselCharges).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.otherDebits ? `
-          <tr>
-            <td>Other Debits / Penalties:</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.otherDebits).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          <tr style="background: #f5f3ff;">
-            <td><strong>Net Payable to Sub:</strong></td>
-            <td class="text-right"><strong style="font-size: 14px; color: #581c87;">₹ ${Number(bill.liveNet || 0).toLocaleString('en-IN')}</strong></td>
+          <tr style="background: #f8fafc; border: 2px solid #0f172a;">
+            <td><strong>Total Bill Amount (₹):</strong></td>
+            <td class="text-right"><strong style="font-size: 14px; color: #0f172a;">₹ ${Number(bill.liveAmount || bill.billAmount || 0).toLocaleString('en-IN')}</strong></td>
           </tr>
         </table>
 
@@ -316,80 +271,12 @@ export default function RM2() {
 
   return (
     <div className="p-3 sm:p-5 md:p-6 space-y-4 max-w-[1600px] mx-auto bg-slate-50/50 min-h-screen">
-      {/* Top Header Card */}
-      <div className="bg-white p-4 md:p-5 rounded-2xl border border-gray-200 shadow-xs space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-md bg-purple-100 text-purple-800 tracking-wider">
-                Actual Details Billing
-              </span>
-              <span className="text-xs text-gray-400 font-mono">Rates from Purchase Order (PO)</span>
-            </div>
-            <h1 className="text-base sm:text-lg md:text-xl font-black text-gray-900 tracking-tight flex items-center gap-2">
-              <Users className="text-purple-600 shrink-0" size={22} />
-              Sub-Contractor Billing (RM2) — Measurement & PO Rate Payout
-            </h1>
-            <p className="text-xs text-gray-500 max-w-4xl">
-              Generates sub-contractor payment vouchers directly from site works sent from <strong>Actual Details Report</strong>.
-              Uses approved <strong>Purchase Order (PO)</strong> rates, material recoveries, retention (5%), advance recovery, and back-to-back safety checks.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate('/upload-design')}
-              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
-            >
-              Go to Actual Details
-            </button>
-          </div>
-        </div>
-
-        {/* Financial KPI Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-gray-100">
-          <div className="bg-purple-50/60 p-3 rounded-xl border border-purple-100">
-            <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider block">
-              Pending Sub Bills
-            </span>
-            <div className="text-base sm:text-lg font-black text-purple-950 font-mono mt-0.5">
-              {pendingBills.length} Bills
-            </div>
-            <div className="text-[10px] text-purple-700 mt-0.5">Sent from Actual Details</div>
-          </div>
-
-          <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100">
-            <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
-              Gross Value (Pending)
-            </span>
-            <div className="text-base sm:text-lg font-black text-blue-950 font-mono mt-0.5">
-              {formatCurrency(totalPendingGross)}
-            </div>
-            <div className="text-[10px] text-blue-600 mt-0.5">Calculated at PO rates</div>
-          </div>
-
-          <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
-            <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">
-              Net Payable to Subs
-            </span>
-            <div className="text-base sm:text-lg font-black text-emerald-950 font-mono mt-0.5">
-              {formatCurrency(totalPendingNet)}
-            </div>
-            <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">
-              After retention & recoveries
-            </div>
-          </div>
-
-          <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100">
-            <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">
-              Billed & Paid Vouchers
-            </span>
-            <div className="text-base sm:text-lg font-black text-indigo-950 font-mono mt-0.5">
-              {formatCurrency(totalCertifiedNet)}
-            </div>
-            <div className="text-[10px] text-indigo-600 mt-0.5">{billedHistory.length} paid vouchers</div>
-          </div>
-        </div>
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h1 className="text-lg md:text-xl font-bold text-gray-900 flex items-center gap-2">
+          <Users className="text-purple-600 shrink-0" size={22} />
+          Sub Contractor Billing (RM2)
+        </h1>
       </div>
 
       {/* Tabs & Search Filter Bar */}
@@ -479,8 +366,7 @@ export default function RM2() {
                       <th className="py-2.5 px-3">Linked PO</th>
                       <th className="py-2.5 px-2 text-center">Items</th>
                       <th className="py-2.5 px-3 text-right">Actual Length</th>
-                      <th className="py-2.5 px-3 text-right">Gross (PO Rate)</th>
-                      <th className="py-2.5 px-3 text-right text-emerald-300">Net Payable</th>
+                      <th className="py-2.5 px-3 text-right">Bill Amount (₹)</th>
                       <th className="py-2.5 px-2 text-center">Status</th>
                     </tr>
                   </thead>
@@ -494,7 +380,7 @@ export default function RM2() {
                             <div className="flex items-center gap-1.5">
                               {!isBilled ? (
                                 <button
-                                  onClick={() => setSelectedBillForModal(bill)}
+                                  onClick={() => navigate(`/subcontractor-billing/bill/${encodeURIComponent(bill.id)}`)}
                                   className="px-2.5 py-1 text-[11px] font-bold bg-purple-600 hover:bg-purple-700 text-white rounded-md flex items-center gap-1 cursor-pointer shadow-xs"
                                 >
                                   <Calculator size={13} /> Calculate & Pay
@@ -509,9 +395,9 @@ export default function RM2() {
                               )}
 
                               <button
-                                onClick={() => navigate(`/rm-bill/${encodeURIComponent(bill.id)}`)}
+                                onClick={() => navigate(`/subcontractor-billing/bill/${encodeURIComponent(bill.id)}`)}
                                 className="p-1 hover:bg-gray-200 rounded text-gray-500 cursor-pointer"
-                                title="View Sent Line Items"
+                                title="View Bill Details"
                               >
                                 <Eye size={15} />
                               </button>
@@ -568,12 +454,8 @@ export default function RM2() {
                             {(bill.liveLength || 0).toLocaleString('en-IN')} m
                           </td>
 
-                          <td className="py-2.5 px-3 text-right font-bold text-gray-950">
-                            {formatCurrency(bill.liveGross)}
-                          </td>
-
-                          <td className="py-2.5 px-3 text-right font-black text-emerald-600 bg-emerald-50/20">
-                            {formatCurrency(bill.liveNet)}
+                          <td className="py-2.5 px-3 text-right font-black text-gray-950 font-mono">
+                            {formatCurrency(bill.liveAmount)}
                           </td>
 
                           <td className="py-2.5 px-2 text-center font-sans">
@@ -596,17 +478,6 @@ export default function RM2() {
             </div>
           )}
         </div>
-      )}
-
-      {/* Bill Calculation & Generation Modal */}
-      {selectedBillForModal && (
-        <GenerateBillModal
-          isOpen={!!selectedBillForModal}
-          onClose={() => setSelectedBillForModal(null)}
-          bill={selectedBillForModal}
-          onSubmitBill={handleSubmitBill}
-          mode="SUBCONTRACTOR"
-        />
       )}
     </div>
   );

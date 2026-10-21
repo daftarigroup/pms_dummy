@@ -22,6 +22,7 @@ import ProductIMF from './pages/ExecutionActualReport/ProductIMF';
 import RM1 from './pages/DepartmentBilling/RM1';
 import RM2 from './pages/SubContractorBillings/RM2';
 import RMBillDetail from './pages/DepartmentBilling/RMBillDetail';
+import BillCalculationPage from './pages/DepartmentBilling/BillCalculationPage';
 import Documentation from './pages/Documentation/Documentation';
 import ShareDocument from './pages/Documentation/ShareDocument';
 import ShareLogs from './pages/ShareLogs/ShareLogs';
@@ -115,6 +116,8 @@ function App() {
                   <Route path="share-logs" element={<ShareLogs />} />
                   <Route path="email-logs" element={<Navigate to="/share-logs" replace />} />
                   <Route path="rm2" element={<RM2 />} />
+                  <Route path="department-billing/bill/:billId" element={<BillCalculationPage mode="DEPARTMENT" />} />
+                  <Route path="subcontractor-billing/bill/:billId" element={<BillCalculationPage mode="SUBCONTRACTOR" />} />
                   <Route path="rm-bill/:billId" element={<RMBillDetail />} />
                   <Route path="settings" element={<Settings />} />
 

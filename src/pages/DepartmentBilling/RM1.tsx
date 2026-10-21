@@ -27,7 +27,6 @@ import {
 } from '../../utils/storageManager';
 import { buildChainageDiffMap } from '../../utils/helpers';
 import { computeBillFromExecutionEntries } from './dynamicBillCalculator';
-import GenerateBillModal from './GenerateBillModal';
 import DepartmentAbstractMatrix from './DepartmentAbstractMatrix';
 import { calculateTable1 } from './billingEngine';
 
@@ -48,7 +47,6 @@ export default function RM1() {
   const [bills, setBills] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'pending' | 'billed' | 'reference'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedBillForModal, setSelectedBillForModal] = useState<any | null>(null);
 
   const refresh = () => {
     const all = getRMBills();
@@ -77,12 +75,10 @@ export default function RM1() {
           : (projOrMinor?.projectName || bill.projectName || 'Project'),
         minorName: bill.minorName || projOrMinor?.minorName || '',
         contractorName: bill.contractorName || projOrMinor?.contractorName || '-',
-        liveGross: bill.status === 'billed' && bill.grossAmount ? bill.grossAmount : calc.grossAmount,
-        liveNet: bill.status === 'billed' && bill.billAmount ? bill.billAmount : calc.netPayable,
+        liveAmount: bill.status === 'billed' && bill.billAmount ? bill.billAmount : calc.totalAmount,
         liveLength: calc.totalLengthMeters,
         liveItemsCount: bill.entries?.length || 0,
         pipeDiaBreakdown: calc.pipeDiaBreakdown,
-        deductions: bill.deductions || calc.deductions,
         itemBreakdown: bill.itemBreakdown || calc.lineItems
       };
     });
@@ -111,11 +107,6 @@ export default function RM1() {
       );
     });
   }, [currentList, searchQuery]);
-
-  // Aggregate metrics
-  const totalPendingGross = pendingBills.reduce((sum, b) => sum + (b.liveGross || 0), 0);
-  const totalPendingNet = pendingBills.reduce((sum, b) => sum + (b.liveNet || 0), 0);
-  const totalCertifiedNet = billedHistory.reduce((sum, b) => sum + (b.liveNet || 0), 0);
 
   const handleSubmitBill = (billId: string, updates: any) => {
     updateRMBill(billId, updates);
@@ -202,33 +193,9 @@ export default function RM1() {
         </table>
 
         <table class="summary-table">
-          <tr>
-            <td><strong>Gross Work Done:</strong></td>
-            <td class="text-right"><strong>₹ ${Number(bill.liveGross || 0).toLocaleString('en-IN')}</strong></td>
-          </tr>
-          ${bill.deductions?.securityDeposit ? `
-          <tr>
-            <td>Security Deposit (5%):</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.securityDeposit).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.tdsAmount ? `
-          <tr>
-            <td>IT TDS (2%):</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.tdsAmount).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.gstTdsAmount ? `
-          <tr>
-            <td>GST TDS (2%):</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.gstTdsAmount).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          ${bill.deductions?.labourCess ? `
-          <tr>
-            <td>Labour Cess (1%):</td>
-            <td class="text-right">- ₹ ${Number(bill.deductions.labourCess).toLocaleString('en-IN')}</td>
-          </tr>` : ''}
-          <tr style="background: #eef2ff;">
-            <td><strong>Net Amount Payable:</strong></td>
-            <td class="text-right"><strong style="font-size: 14px; color: #1e3a8a;">₹ ${Number(bill.liveNet || 0).toLocaleString('en-IN')}</strong></td>
+          <tr style="background: #f8fafc; border: 2px solid #0f172a;">
+            <td><strong>Total Bill Amount:</strong></td>
+            <td class="text-right"><strong style="font-size: 14px; color: #0f172a;">₹ ${Number(bill.liveAmount || bill.billAmount || 0).toLocaleString('en-IN')}</strong></td>
           </tr>
         </table>
 
@@ -255,70 +222,12 @@ export default function RM1() {
 
   return (
     <div className="p-3 sm:p-5 md:p-6 space-y-4 max-w-[1600px] mx-auto bg-slate-50/50 min-h-screen">
-      {/* Top Header Card */}
-      <div className="bg-white p-4 md:p-5 rounded-2xl border border-gray-200 shadow-xs space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-md bg-indigo-100 text-indigo-800 tracking-wider">
-                Execution Details Billing
-              </span>
-              <span className="text-xs text-gray-400 font-mono">Table 1 Logic Calculation</span>
-            </div>
-            <h1 className="text-base sm:text-lg md:text-xl font-black text-gray-900 tracking-tight flex items-center gap-2">
-              <Building2 className="text-indigo-600 shrink-0" size={22} />
-              Department Billing (RM1) — Execution Details RA Billing
-            </h1>
-            <p className="text-xs text-gray-500 max-w-4xl">
-              Generates official Government Department Running Account (RA) Bills directly from works sent for payment in <strong>Execution Details Report</strong>.
-              Computes quantities, PO/Schedule B rates ($Qty \times Rate$), and statutory recoveries (SD 5%, TDS, GST-TDS, Cess, Royalty).
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate('/upload-design')}
-              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
-            >
-              Go to Execution Details
-            </button>
-          </div>
-        </div>
-
-        {/* Financial KPI Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-gray-100">
-          <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-100">
-            <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">Pending Bills for Payment</span>
-            <div className="text-base sm:text-lg font-black text-amber-950 font-mono mt-0.5">
-              {pendingBills.length} Bills
-            </div>
-            <div className="text-[10px] text-amber-700 mt-0.5">Sent from Execution Details</div>
-          </div>
-
-          <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100">
-            <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">Gross Value (Pending)</span>
-            <div className="text-base sm:text-lg font-black text-blue-950 font-mono mt-0.5">
-              {formatCurrency(totalPendingGross)}
-            </div>
-            <div className="text-[10px] text-blue-600 mt-0.5">Calculated at Schedule B rates</div>
-          </div>
-
-          <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
-            <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Net Payable (Pending)</span>
-            <div className="text-base sm:text-lg font-black text-emerald-950 font-mono mt-0.5">
-              {formatCurrency(totalPendingNet)}
-            </div>
-            <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">After statutory deductions</div>
-          </div>
-
-          <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100">
-            <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">Certified Bills History</span>
-            <div className="text-base sm:text-lg font-black text-indigo-950 font-mono mt-0.5">
-              {formatCurrency(totalCertifiedNet)}
-            </div>
-            <div className="text-[10px] text-indigo-600 mt-0.5">{billedHistory.length} certified RA bills</div>
-          </div>
-        </div>
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h1 className="text-lg md:text-xl font-bold text-gray-900 flex items-center gap-2">
+          <Building2 className="text-indigo-600 shrink-0" size={22} />
+          Department Billing (RM1)
+        </h1>
       </div>
 
       {/* Tabs & Search Filter Bar */}
@@ -405,8 +314,7 @@ export default function RM1() {
                       <th className="py-2.5 px-3">Contractor</th>
                       <th className="py-2.5 px-2 text-center">Items Sent</th>
                       <th className="py-2.5 px-3 text-right">Pipe Length</th>
-                      <th className="py-2.5 px-3 text-right">Calculated Gross</th>
-                      <th className="py-2.5 px-3 text-right text-emerald-300">Net Payable</th>
+                      <th className="py-2.5 px-3 text-right">Bill Amount (₹)</th>
                       <th className="py-2.5 px-2 text-center">Status</th>
                     </tr>
                   </thead>
@@ -420,7 +328,7 @@ export default function RM1() {
                             <div className="flex items-center gap-1.5">
                               {!isBilled ? (
                                 <button
-                                  onClick={() => setSelectedBillForModal(bill)}
+                                  onClick={() => navigate(`/department-billing/bill/${encodeURIComponent(bill.id)}`)}
                                   className="px-2.5 py-1 text-[11px] font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-md flex items-center gap-1 cursor-pointer shadow-xs"
                                 >
                                   <Calculator size={13} /> Calculate & Bill
@@ -435,9 +343,9 @@ export default function RM1() {
                               )}
 
                               <button
-                                onClick={() => navigate(`/rm-bill/${encodeURIComponent(bill.id)}`)}
+                                onClick={() => navigate(`/department-billing/bill/${encodeURIComponent(bill.id)}`)}
                                 className="p-1 hover:bg-gray-200 rounded text-gray-500 cursor-pointer"
-                                title="View Sent Line Items"
+                                title="View Bill Details"
                               >
                                 <Eye size={15} />
                               </button>
@@ -478,12 +386,8 @@ export default function RM1() {
                             {(bill.liveLength || 0).toLocaleString('en-IN')} m
                           </td>
 
-                          <td className="py-2.5 px-3 text-right font-bold text-gray-950">
-                            {formatCurrency(bill.liveGross)}
-                          </td>
-
-                          <td className="py-2.5 px-3 text-right font-black text-emerald-600 bg-emerald-50/20">
-                            {formatCurrency(bill.liveNet)}
+                          <td className="py-2.5 px-3 text-right font-black text-gray-950 font-mono">
+                            {formatCurrency(bill.liveAmount)}
                           </td>
 
                           <td className="py-2.5 px-2 text-center font-sans">
@@ -506,17 +410,6 @@ export default function RM1() {
             </div>
           )}
         </div>
-      )}
-
-      {/* Bill Calculation & Generation Modal */}
-      {selectedBillForModal && (
-        <GenerateBillModal
-          isOpen={!!selectedBillForModal}
-          onClose={() => setSelectedBillForModal(null)}
-          bill={selectedBillForModal}
-          onSubmitBill={handleSubmitBill}
-          mode="DEPARTMENT"
-        />
       )}
     </div>
   );
