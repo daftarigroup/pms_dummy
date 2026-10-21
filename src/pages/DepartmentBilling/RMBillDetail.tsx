@@ -338,6 +338,7 @@ export default function RMBillDetail() {
         onClose={() => setShowBillModal(false)}
         bill={bill}
         onSubmitBill={handleSubmitBill}
+        mode={bill?.billType === 'Actual' ? 'SUBCONTRACTOR' : 'DEPARTMENT'}
       />
     </div>
   );

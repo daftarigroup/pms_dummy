@@ -64,11 +64,11 @@ export default function RM1() {
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
-  // Compute live quantities and amounts for each pending bill from its sent execution entries
+  // Compute live quantities and amounts for each pending bill from its sent execution entries using Schedule - B rates
   const billsWithCalculations = useMemo(() => {
     return bills.map(bill => {
       const projOrMinor = getProjectOrMinor(bill.projectNo);
-      const calc = computeBillFromExecutionEntries(bill);
+      const calc = computeBillFromExecutionEntries(bill, { rateMode: 'SCHEDULE_B' });
       return {
         ...bill,
         projOrMinor,
@@ -82,7 +82,8 @@ export default function RM1() {
         liveLength: calc.totalLengthMeters,
         liveItemsCount: bill.entries?.length || 0,
         pipeDiaBreakdown: calc.pipeDiaBreakdown,
-        deductions: bill.deductions || calc.deductions
+        deductions: bill.deductions || calc.deductions,
+        itemBreakdown: bill.itemBreakdown || calc.lineItems
       };
     });
   }, [bills]);
@@ -514,6 +515,7 @@ export default function RM1() {
           onClose={() => setSelectedBillForModal(null)}
           bill={selectedBillForModal}
           onSubmitBill={handleSubmitBill}
+          mode="DEPARTMENT"
         />
       )}
     </div>

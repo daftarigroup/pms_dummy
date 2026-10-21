@@ -16,7 +16,9 @@ import {
   Printer,
   Trash2,
   Layers,
-  ArrowRight
+  ArrowRight,
+  TrendingUp,
+  Tag
 } from 'lucide-react';
 import {
   getProjects,
@@ -32,9 +34,8 @@ import {
 } from '../../utils/storageManager';
 import { buildChainageDiffMap } from '../../utils/helpers';
 import { computeBillFromExecutionEntries } from '../DepartmentBilling/dynamicBillCalculator';
-import SubContractorBillSheet from './SubContractorBillSheet';
+import GenerateBillModal from '../DepartmentBilling/GenerateBillModal';
 import BackToBackReconciliation from './BackToBackReconciliation';
-import SubContractorLedger from './SubContractorLedger';
 
 const formatCurrency = (val: number) => {
   if (val === undefined || val === null || isNaN(val)) return '₹0';
@@ -47,6 +48,7 @@ export default function RM2() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSubContractor, setSelectedSubContractor] = useState('');
   const [selectedMinor, setSelectedMinor] = useState('');
+  const [selectedBillForModal, setSelectedBillForModal] = useState<any | null>(null);
 
   // Real Bills and Projects
   const [bills, setBills] = useState<any[]>([]);
@@ -55,13 +57,15 @@ export default function RM2() {
 
   const refresh = () => {
     const allBills = getRMBills();
-    // Sub-Contractor bills are those of type 'Actual'
+    // Sub-Contractor bills are those of type 'Actual' sent from Actual Details
     const actualBills = allBills.filter(b => b.billType === 'Actual');
     setBills(actualBills);
 
     // Also look for projects that have completed Department Billing (Execution)
     const completedDeptBills = allBills.filter(b => b.billType === 'Execution' && b.status === 'billed');
-    const eligibleProjectNos = new Set(actualBills.map(b => b.projectNo).concat(completedDeptBills.map(b => b.projectNo)));
+    const eligibleProjectNos = new Set(
+      actualBills.map(b => b.projectNo).concat(completedDeptBills.map(b => b.projectNo))
+    );
 
     const projects = Array.from(eligibleProjectNos).map(id => {
       const projOrMinor = getProjectOrMinor(id);
@@ -74,8 +78,12 @@ export default function RM2() {
     projects.forEach(p => {
       const mob = getMobilizationForProject(p.serialNo || p.id);
       const sentPo = getSentPOForProject(p.serialNo || p.id);
-      mob?.consultants?.forEach((c: any) => { if (c.name?.trim()) subs.add(c.name.trim()); });
-      sentPo?.consultants?.forEach((c: any) => { if (c.name?.trim()) subs.add(c.name.trim()); });
+      mob?.consultants?.forEach((c: any) => {
+        if (c.name?.trim()) subs.add(c.name.trim());
+      });
+      sentPo?.consultants?.forEach((c: any) => {
+        if (c.name?.trim()) subs.add(c.name.trim());
+      });
       if (p.contractorName && p.contractorName !== '-') subs.add(p.contractorName.trim());
     });
     getExternalPurchaseOrders().forEach((p: any) => {
@@ -98,25 +106,34 @@ export default function RM2() {
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
-  // Compute live quantities and amounts for each sub-contractor bill
+  // Compute live quantities and amounts for each sub-contractor bill directly at PO rates
   const billsWithCalculations = useMemo(() => {
     return bills.map(bill => {
       const projOrMinor = getProjectOrMinor(bill.projectNo);
-      const calc = computeBillFromExecutionEntries(bill);
+      const calc = computeBillFromExecutionEntries(bill, { rateMode: 'PO' });
       return {
         ...bill,
         projOrMinor,
-        projectName: bill.minorName && projOrMinor?.originalProjectName
-          ? `${projOrMinor.originalProjectName} (${bill.minorName})`
-          : (projOrMinor?.projectName || bill.projectName || 'Project'),
+        projectName:
+          bill.minorName && projOrMinor?.originalProjectName
+            ? `${projOrMinor.originalProjectName} (${bill.minorName})`
+            : projOrMinor?.projectName || bill.projectName || 'Project',
         minorName: bill.minorName || projOrMinor?.minorName || '',
-        subContractorName: bill.subContractorName || bill.contractorName || projOrMinor?.contractorName || selectedSubContractor,
+        subContractorName:
+          bill.subContractorName ||
+          bill.contractorName ||
+          projOrMinor?.contractorName ||
+          selectedSubContractor,
+        poNumber: bill.poNumber || calc.poNumber,
         liveGross: bill.status === 'billed' && bill.grossAmount ? bill.grossAmount : calc.grossAmount,
         liveNet: bill.status === 'billed' && bill.billAmount ? bill.billAmount : calc.netPayable,
         liveLength: calc.totalLengthMeters,
         liveItemsCount: bill.entries?.length || 0,
         pipeDiaBreakdown: calc.pipeDiaBreakdown,
-        deductions: bill.deductions || calc.deductions
+        deductions: bill.deductions || calc.deductions,
+        itemBreakdown: bill.itemBreakdown || calc.lineItems,
+        contractorMargin: bill.contractorMargin !== undefined ? bill.contractorMargin : calc.contractorMargin,
+        contractorMarginPct: bill.contractorMarginPct !== undefined ? bill.contractorMarginPct : calc.contractorMarginPct
       };
     });
   }, [bills, selectedSubContractor]);
@@ -140,7 +157,8 @@ export default function RM2() {
         String(b.billNo || '').toLowerCase().includes(q) ||
         String(b.projectName || '').toLowerCase().includes(q) ||
         String(b.minorName || '').toLowerCase().includes(q) ||
-        String(b.subContractorName || '').toLowerCase().includes(q)
+        String(b.subContractorName || '').toLowerCase().includes(q) ||
+        String(b.poNumber || '').toLowerCase().includes(q)
       );
     });
   }, [currentList, searchQuery]);
@@ -149,6 +167,152 @@ export default function RM2() {
   const totalPendingGross = pendingBills.reduce((sum, b) => sum + (b.liveGross || 0), 0);
   const totalPendingNet = pendingBills.reduce((sum, b) => sum + (b.liveNet || 0), 0);
   const totalCertifiedNet = billedHistory.reduce((sum, b) => sum + (b.liveNet || 0), 0);
+  const totalMarginSecured = billsWithCalculations.reduce((sum, b) => sum + (b.contractorMargin || 0), 0);
+
+  const handleSubmitBill = (billId: string, updates: any) => {
+    updateRMBill(billId, updates);
+    refresh();
+    setSelectedBillForModal(null);
+  };
+
+  const handleDeleteBill = (id: string) => {
+    if (!window.confirm('Delete this Sub-Contractor payment voucher record?')) return;
+    const all = getRMBills();
+    saveRMBills(all.filter(b => b.id !== id));
+    toast.success('Sub-Contractor voucher removed');
+    refresh();
+  };
+
+  const handlePrint = (bill: any) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error('Pop-up blocked. Please allow pop-ups to print voucher.');
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Sub-Contractor Payment Voucher - ${bill.billNo || bill.rmNo}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 30px; font-size: 12px; color: #111; }
+          .header { text-align: center; border-bottom: 2px solid #581c87; padding-bottom: 12px; margin-bottom: 18px; }
+          .header h1 { margin: 0 0 5px 0; font-size: 16px; text-transform: uppercase; color: #3b0764; }
+          .header h2 { margin: 0; font-size: 13px; font-weight: normal; color: #4b5563; }
+          .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+          .meta-item { display: flex; }
+          .meta-label { font-weight: bold; width: 160px; color: #374151; }
+          table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+          th, td { border: 1px solid #9ca3af; padding: 6px 8px; }
+          th { background: #f3f4f6; text-align: left; font-size: 11px; }
+          .text-right { text-align: right; }
+          .text-center { text-align: center; }
+          .summary-table { width: 380px; margin-left: auto; margin-top: 20px; }
+          .summary-table td { padding: 5px 8px; }
+          .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; margin-top: 50px; text-align: center; gap: 10px; }
+          .sig-box { border-top: 1px dashed #666; padding-top: 8px; font-weight: bold; font-size: 11px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>Sub-Contractor Payment Certificate / Disbursement Voucher</h1>
+          <h2>Billed from Site Actual Details • Rates from Purchase Order (PO)</h2>
+          <div style="font-weight: bold; margin-top: 5px;">${bill.projectName} ${bill.minorName ? `(${bill.minorName})` : ''}</div>
+        </div>
+
+        <div class="meta-grid">
+          <div class="meta-item"><span class="meta-label">Voucher / Bill No:</span> <span>${bill.billNo || bill.rmNo}</span></div>
+          <div class="meta-item"><span class="meta-label">Bill Date:</span> <span>${bill.billDate || '-'}</span></div>
+          <div class="meta-item"><span class="meta-label">Sub-Contractor:</span> <span><strong>${bill.subContractorName || bill.contractorName || '-'}</strong></span></div>
+          <div class="meta-item"><span class="meta-label">Linked PO Number:</span> <span><strong>${bill.poNumber || 'PO Scope'}</strong></span></div>
+          <div class="meta-item"><span class="meta-label">Total Actual Length:</span> <span>${(bill.liveLength || 0).toLocaleString('en-IN')} m</span></div>
+          <div class="meta-item"><span class="meta-label">Reference RM No:</span> <span>${bill.rmNo}</span></div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th class="text-center" style="width: 40px;">#</th>
+              <th>Item Description</th>
+              <th class="text-center" style="width: 50px;">Unit</th>
+              <th class="text-right" style="width: 90px;">PO Rate (₹)</th>
+              <th class="text-right" style="width: 90px;">Actual Qty</th>
+              <th class="text-right" style="width: 110px;">Amount (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(bill.itemBreakdown || []).map((e: any, idx: number) => `
+              <tr>
+                <td class="text-center">${idx + 1}</td>
+                <td>${e.description} <small style="color: #6b7280;">(${e.rateSource || 'PO'})</small></td>
+                <td class="text-center">${e.unit}</td>
+                <td class="text-right">${Number(e.rate || 0).toLocaleString('en-IN')}</td>
+                <td class="text-right">${Number(e.quantity || 0).toLocaleString('en-IN')}</td>
+                <td class="text-right">${Number(e.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        <table class="summary-table">
+          <tr>
+            <td><strong>Sub Gross Work Done (PO Rates):</strong></td>
+            <td class="text-right"><strong>₹ ${Number(bill.liveGross || 0).toLocaleString('en-IN')}</strong></td>
+          </tr>
+          ${bill.deductions?.retentionAmount ? `
+          <tr>
+            <td>Retention Money (${bill.deductions?.retentionPct || 5}%):</td>
+            <td class="text-right">- ₹ ${Number(bill.deductions.retentionAmount).toLocaleString('en-IN')}</td>
+          </tr>` : ''}
+          ${bill.deductions?.tdsAmount ? `
+          <tr>
+            <td>TDS u/s 194C (${bill.deductions?.tdsPct || 1}%):</td>
+            <td class="text-right">- ₹ ${Number(bill.deductions.tdsAmount).toLocaleString('en-IN')}</td>
+          </tr>` : ''}
+          ${bill.deductions?.materialIssuesRecovery ? `
+          <tr>
+            <td>Material Recovery (Pipes/Fittings):</td>
+            <td class="text-right">- ₹ ${Number(bill.deductions.materialIssuesRecovery).toLocaleString('en-IN')}</td>
+          </tr>` : ''}
+          ${bill.deductions?.advanceRecovery ? `
+          <tr>
+            <td>Mobilization Advance Recovery:</td>
+            <td class="text-right">- ₹ ${Number(bill.deductions.advanceRecovery).toLocaleString('en-IN')}</td>
+          </tr>` : ''}
+          ${bill.deductions?.dieselCharges ? `
+          <tr>
+            <td>Machinery / Diesel Debits:</td>
+            <td class="text-right">- ₹ ${Number(bill.deductions.dieselCharges).toLocaleString('en-IN')}</td>
+          </tr>` : ''}
+          ${bill.deductions?.otherDebits ? `
+          <tr>
+            <td>Other Debits / Penalties:</td>
+            <td class="text-right">- ₹ ${Number(bill.deductions.otherDebits).toLocaleString('en-IN')}</td>
+          </tr>` : ''}
+          <tr style="background: #f5f3ff;">
+            <td><strong>Net Payable to Sub:</strong></td>
+            <td class="text-right"><strong style="font-size: 14px; color: #581c87;">₹ ${Number(bill.liveNet || 0).toLocaleString('en-IN')}</strong></td>
+          </tr>
+        </table>
+
+        <div class="signatures">
+          <div class="sig-box">Site Engineer</div>
+          <div class="sig-box">Billing Engineer</div>
+          <div class="sig-box">Project Manager</div>
+          <div class="sig-box">Sub-Contractor Acceptance</div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
+  };
 
   return (
     <div className="p-3 sm:p-5 md:p-6 space-y-4 max-w-[1600px] mx-auto bg-slate-50/50 min-h-screen">
@@ -160,15 +324,15 @@ export default function RM2() {
               <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-md bg-purple-100 text-purple-800 tracking-wider">
                 Actual Details Billing
               </span>
-              <span className="text-xs text-gray-400 font-mono">Back-to-Back Reconciliation</span>
+              <span className="text-xs text-gray-400 font-mono">Rates from Purchase Order (PO)</span>
             </div>
             <h1 className="text-base sm:text-lg md:text-xl font-black text-gray-900 tracking-tight flex items-center gap-2">
               <Users className="text-purple-600 shrink-0" size={22} />
-              Sub-Contractor Billing (RM2) — Measurement & Leak Prevention
+              Sub-Contractor Billing (RM2) — Measurement & PO Rate Payout
             </h1>
             <p className="text-xs text-gray-500 max-w-4xl">
               Generates sub-contractor payment vouchers directly from site works sent from <strong>Actual Details Report</strong>.
-              Applies sub-contractor PO rates, material recoveries, advance/retention deductions, and <strong>back-to-back safety checks</strong> against Department certified quantities.
+              Uses approved <strong>Purchase Order (PO)</strong> rates, material recoveries, retention (5%), advance recovery, and back-to-back safety checks.
             </p>
           </div>
 
@@ -185,7 +349,9 @@ export default function RM2() {
         {/* Financial KPI Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-gray-100">
           <div className="bg-purple-50/60 p-3 rounded-xl border border-purple-100">
-            <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider block">Pending Sub Bills</span>
+            <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider block">
+              Pending Sub Bills
+            </span>
             <div className="text-base sm:text-lg font-black text-purple-950 font-mono mt-0.5">
               {pendingBills.length} Bills
             </div>
@@ -193,23 +359,31 @@ export default function RM2() {
           </div>
 
           <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100">
-            <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">Gross Value (Pending)</span>
+            <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
+              Gross Value (Pending)
+            </span>
             <div className="text-base sm:text-lg font-black text-blue-950 font-mono mt-0.5">
               {formatCurrency(totalPendingGross)}
             </div>
-            <div className="text-[10px] text-blue-600 mt-0.5">At Sub-Contractor PO rates</div>
+            <div className="text-[10px] text-blue-600 mt-0.5">Calculated at PO rates</div>
           </div>
 
           <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
-            <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Net Payable to Subs</span>
+            <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">
+              Net Payable to Subs
+            </span>
             <div className="text-base sm:text-lg font-black text-emerald-950 font-mono mt-0.5">
               {formatCurrency(totalPendingNet)}
             </div>
-            <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">After material & retention deductions</div>
+            <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">
+              After retention & recoveries
+            </div>
           </div>
 
           <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100">
-            <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">Billed & Paid Vouchers</span>
+            <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">
+              Billed & Paid Vouchers
+            </span>
             <div className="text-base sm:text-lg font-black text-indigo-950 font-mono mt-0.5">
               {formatCurrency(totalCertifiedNet)}
             </div>
@@ -266,7 +440,7 @@ export default function RM2() {
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search bill no, sub-contractor, minor..."
+              placeholder="Search bill no, sub-contractor, PO #..."
               className="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg bg-gray-50/50 focus:ring-2 focus:ring-purple-500 focus:outline-none"
             />
           </div>
@@ -282,7 +456,9 @@ export default function RM2() {
             <div className="bg-white p-12 text-center rounded-xl border border-gray-200">
               <Users className="mx-auto text-gray-300 mb-3" size={44} />
               <h3 className="text-sm font-bold text-gray-700 uppercase">
-                {activeTab === 'pending' ? 'No Pending Sub-Contractor Bills' : 'No Sub-Contractor Vouchers Found'}
+                {activeTab === 'pending'
+                  ? 'No Pending Sub-Contractor Bills'
+                  : 'No Sub-Contractor Vouchers Found'}
               </h3>
               <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
                 {activeTab === 'pending'
@@ -300,11 +476,12 @@ export default function RM2() {
                       <th className="py-2.5 px-3">RM / Voucher No</th>
                       <th className="py-2.5 px-3">Sub-Contractor</th>
                       <th className="py-2.5 px-3">Project / Minor</th>
-                      <th className="py-2.5 px-2 text-center">Items Sent</th>
+                      <th className="py-2.5 px-3">Linked PO</th>
+                      <th className="py-2.5 px-2 text-center">Items</th>
                       <th className="py-2.5 px-3 text-right">Actual Length</th>
-                      <th className="py-2.5 px-3 text-right">Gross Amount</th>
+                      <th className="py-2.5 px-3 text-right">Gross (PO Rate)</th>
                       <th className="py-2.5 px-3 text-right text-emerald-300">Net Payable</th>
-                      <th className="py-2.5 px-2 text-center">Safety Check</th>
+                      <th className="py-2.5 px-2 text-center">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 font-mono text-[11px]">
@@ -315,21 +492,54 @@ export default function RM2() {
                         <tr key={bill.id} className="hover:bg-gray-50 transition-colors">
                           <td className="py-2.5 px-3 font-sans">
                             <div className="flex items-center gap-1.5">
+                              {!isBilled ? (
+                                <button
+                                  onClick={() => setSelectedBillForModal(bill)}
+                                  className="px-2.5 py-1 text-[11px] font-bold bg-purple-600 hover:bg-purple-700 text-white rounded-md flex items-center gap-1 cursor-pointer shadow-xs"
+                                >
+                                  <Calculator size={13} /> Calculate & Pay
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handlePrint(bill)}
+                                  className="px-2 py-1 text-[11px] font-bold bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-md flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Printer size={13} /> Voucher
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => navigate(`/rm-bill/${encodeURIComponent(bill.id)}`)}
-                                className="px-2.5 py-1 text-[11px] font-bold bg-purple-600 hover:bg-purple-700 text-white rounded-md flex items-center gap-1 cursor-pointer shadow-xs"
+                                className="p-1 hover:bg-gray-200 rounded text-gray-500 cursor-pointer"
+                                title="View Sent Line Items"
                               >
-                                <Eye size={13} /> {isBilled ? 'View Voucher' : 'Calculate & Pay'}
+                                <Eye size={15} />
                               </button>
+
+                              {isBilled && (
+                                <button
+                                  onClick={() => handleDeleteBill(bill.id)}
+                                  className="p-1 hover:bg-rose-100 rounded text-rose-500 cursor-pointer"
+                                  title="Delete"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
                             </div>
                           </td>
 
                           <td className="py-2.5 px-3 font-bold text-purple-900">
                             {bill.billNo || bill.rmNo}
-                            {bill.billNo && <div className="text-[10px] text-gray-400 font-normal">Ref: {bill.rmNo}</div>}
+                            {bill.billNo && (
+                              <div className="text-[10px] text-gray-400 font-normal">
+                                Ref: {bill.rmNo}
+                              </div>
+                            )}
                           </td>
 
-                          <td className="py-2.5 px-3 font-sans font-bold text-gray-900">{bill.subContractorName}</td>
+                          <td className="py-2.5 px-3 font-sans font-bold text-gray-900">
+                            {bill.subContractorName}
+                          </td>
 
                           <td className="py-2.5 px-3 font-sans font-medium text-gray-800">
                             <div>{bill.projectName}</div>
@@ -337,6 +547,16 @@ export default function RM2() {
                               <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-semibold">
                                 Minor: {bill.minorName}
                               </span>
+                            )}
+                          </td>
+
+                          <td className="py-2.5 px-3 font-sans">
+                            {bill.poNumber ? (
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-purple-100 text-purple-800 font-mono font-bold">
+                                {bill.poNumber}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-400 font-mono">PO Scope</span>
                             )}
                           </td>
 
@@ -357,9 +577,15 @@ export default function RM2() {
                           </td>
 
                           <td className="py-2.5 px-2 text-center font-sans">
-                            <span className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center justify-center gap-1">
-                              <ShieldCheck size={11} /> Reconciled
-                            </span>
+                            {isBilled ? (
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                Paid Voucher
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 animate-pulse">
+                                Pending
+                              </span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -370,6 +596,17 @@ export default function RM2() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Bill Calculation & Generation Modal */}
+      {selectedBillForModal && (
+        <GenerateBillModal
+          isOpen={!!selectedBillForModal}
+          onClose={() => setSelectedBillForModal(null)}
+          bill={selectedBillForModal}
+          onSubmitBill={handleSubmitBill}
+          mode="SUBCONTRACTOR"
+        />
       )}
     </div>
   );
