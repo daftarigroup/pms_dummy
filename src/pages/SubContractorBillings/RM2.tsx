@@ -1,32 +1,40 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import {
   Users,
-  FileSpreadsheet,
-  Layers,
-  FileText,
+  Search,
+  Eye,
+  RotateCcw,
+  Clock,
   History as HistoryIcon,
   ShieldCheck,
-  TrendingUp,
-  MapPin,
+  ShieldAlert,
+  Calendar,
   Building2,
-  AlertTriangle,
-  ChevronDown
+  Calculator,
+  Printer,
+  Trash2,
+  Layers,
+  ArrowRight
 } from 'lucide-react';
-import toast from 'react-hot-toast';
-import { TABLE_1_MINORS } from '../DepartmentBilling/table1SeedData';
+import {
+  getProjects,
+  getMinors,
+  getRMBills,
+  saveRMBills,
+  updateRMBill,
+  getProjectOrMinor,
+  getMobilizationForProject,
+  getSentPOForProject,
+  getActuals,
+  getExternalPurchaseOrders
+} from '../../utils/storageManager';
+import { buildChainageDiffMap } from '../../utils/helpers';
+import { computeBillFromExecutionEntries } from '../DepartmentBilling/dynamicBillCalculator';
 import SubContractorBillSheet from './SubContractorBillSheet';
 import BackToBackReconciliation from './BackToBackReconciliation';
 import SubContractorLedger from './SubContractorLedger';
-import { getRMBills } from '../../utils/storageManager';
-
-const DEFAULT_SUB_CONTRACTORS = [
-  'Apex Engineering & Infrastructure',
-  'Shree Ram Construction Co.',
-  'Kalyan Earthmovers & Piping',
-  'Balaji Pipeline Infrastructure',
-  'Omkar Infratech Projects',
-  'Sai Krupa Engineering Works'
-];
 
 const formatCurrency = (val: number) => {
   if (val === undefined || val === null || isNaN(val)) return '₹0';
@@ -34,24 +42,113 @@ const formatCurrency = (val: number) => {
 };
 
 export default function RM2() {
-  const [activeTab, setActiveTab] = useState<'generate' | 'reconcile' | 'ledger'>('generate');
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<'pending' | 'billed' | 'reconcile'>('pending');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSubContractor, setSelectedSubContractor] = useState('');
+  const [selectedMinor, setSelectedMinor] = useState('');
 
-  // Sub-contractor selection
-  const [selectedSubContractor, setSelectedSubContractor] = useState(DEFAULT_SUB_CONTRACTORS[0]);
-  const [selectedMinor, setSelectedMinor] = useState('injewada');
+  // Real Bills and Projects
+  const [bills, setBills] = useState<any[]>([]);
+  const [projectsList, setProjectsList] = useState<any[]>([]);
+  const [subContractorsList, setSubContractorsList] = useState<string[]>([]);
 
-  // Refresh trigger
-  const [refreshKey, setRefreshKey] = useState(0);
+  const refresh = () => {
+    const allBills = getRMBills();
+    // Sub-Contractor bills are those of type 'Actual'
+    const actualBills = allBills.filter(b => b.billType === 'Actual');
+    setBills(actualBills);
 
-  // Compute aggregate numbers from all sub-contractor bills
-  const subBills = useMemo(() => {
-    return getRMBills().filter(b => b.billType === 'Actual');
-  }, [refreshKey]);
+    // Also look for projects that have completed Department Billing (Execution)
+    const completedDeptBills = allBills.filter(b => b.billType === 'Execution' && b.status === 'billed');
+    const eligibleProjectNos = new Set(actualBills.map(b => b.projectNo).concat(completedDeptBills.map(b => b.projectNo)));
 
-  const totalGrossBilled = subBills.reduce((sum, b) => sum + (b.grossAmount || b.billAmount || 0), 0);
-  const totalNetPaid = subBills.reduce((sum, b) => sum + (b.billAmount || 0), 0);
-  const totalDeductions = totalGrossBilled - totalNetPaid;
-  const totalContractorMargin = subBills.reduce((sum, b) => sum + (b.totalMargin || 0), 0);
+    const projects = Array.from(eligibleProjectNos).map(id => {
+      const projOrMinor = getProjectOrMinor(id);
+      return projOrMinor || { serialNo: id, projectName: id };
+    });
+    setProjectsList(projects);
+
+    // Extract all real subcontractors from mobilizations, POs, and projects
+    const subs = new Set<string>();
+    projects.forEach(p => {
+      const mob = getMobilizationForProject(p.serialNo || p.id);
+      const sentPo = getSentPOForProject(p.serialNo || p.id);
+      mob?.consultants?.forEach((c: any) => { if (c.name?.trim()) subs.add(c.name.trim()); });
+      sentPo?.consultants?.forEach((c: any) => { if (c.name?.trim()) subs.add(c.name.trim()); });
+      if (p.contractorName && p.contractorName !== '-') subs.add(p.contractorName.trim());
+    });
+    getExternalPurchaseOrders().forEach((p: any) => {
+      if (p.name?.trim()) subs.add(p.name.trim());
+    });
+
+    const subList = Array.from(subs);
+    if (subList.length === 0) {
+      subList.push('Apex Engineering & Infrastructure', 'Shree Ram Construction Co.', 'Kalyan Earthmovers & Piping');
+    }
+    setSubContractorsList(subList);
+    if (!selectedSubContractor && subList.length > 0) setSelectedSubContractor(subList[0]);
+    if (!selectedMinor && projects.length > 0) setSelectedMinor(projects[0].minorName || projects[0].serialNo || 'injewada');
+  };
+
+  useEffect(() => {
+    refresh();
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  // Compute live quantities and amounts for each sub-contractor bill
+  const billsWithCalculations = useMemo(() => {
+    return bills.map(bill => {
+      const projOrMinor = getProjectOrMinor(bill.projectNo);
+      const calc = computeBillFromExecutionEntries(bill);
+      return {
+        ...bill,
+        projOrMinor,
+        projectName: bill.minorName && projOrMinor?.originalProjectName
+          ? `${projOrMinor.originalProjectName} (${bill.minorName})`
+          : (projOrMinor?.projectName || bill.projectName || 'Project'),
+        minorName: bill.minorName || projOrMinor?.minorName || '',
+        subContractorName: bill.subContractorName || bill.contractorName || projOrMinor?.contractorName || selectedSubContractor,
+        liveGross: bill.status === 'billed' && bill.grossAmount ? bill.grossAmount : calc.grossAmount,
+        liveNet: bill.status === 'billed' && bill.billAmount ? bill.billAmount : calc.netPayable,
+        liveLength: calc.totalLengthMeters,
+        liveItemsCount: bill.entries?.length || 0,
+        pipeDiaBreakdown: calc.pipeDiaBreakdown,
+        deductions: bill.deductions || calc.deductions
+      };
+    });
+  }, [bills, selectedSubContractor]);
+
+  const pendingBills = useMemo(() => {
+    return billsWithCalculations.filter(b => b.status === 'pending');
+  }, [billsWithCalculations]);
+
+  const billedHistory = useMemo(() => {
+    return billsWithCalculations.filter(b => b.status === 'billed');
+  }, [billsWithCalculations]);
+
+  const currentList = activeTab === 'pending' ? pendingBills : billedHistory;
+
+  const filteredList = useMemo(() => {
+    if (!searchQuery.trim()) return currentList;
+    const q = searchQuery.toLowerCase();
+    return currentList.filter(b => {
+      return (
+        String(b.rmNo || '').toLowerCase().includes(q) ||
+        String(b.billNo || '').toLowerCase().includes(q) ||
+        String(b.projectName || '').toLowerCase().includes(q) ||
+        String(b.minorName || '').toLowerCase().includes(q) ||
+        String(b.subContractorName || '').toLowerCase().includes(q)
+      );
+    });
+  }, [currentList, searchQuery]);
+
+  // Aggregate metrics
+  const totalPendingGross = pendingBills.reduce((sum, b) => sum + (b.liveGross || 0), 0);
+  const totalPendingNet = pendingBills.reduce((sum, b) => sum + (b.liveNet || 0), 0);
+  const totalCertifiedNet = billedHistory.reduce((sum, b) => sum + (b.liveNet || 0), 0);
 
   return (
     <div className="p-3 sm:p-5 md:p-6 space-y-4 max-w-[1600px] mx-auto bg-slate-50/50 min-h-screen">
@@ -60,149 +157,219 @@ export default function RM2() {
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-black uppercase px-2.5 py-0.5 rounded-md bg-purple-100 text-purple-800 tracking-wider">
-                Table 1 Back-to-Back Flow
+              <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-md bg-purple-100 text-purple-800 tracking-wider">
+                Actual Details Billing
               </span>
-              <span className="text-xs text-gray-400 font-mono">Sub-Contractor Work Packages</span>
+              <span className="text-xs text-gray-400 font-mono">Back-to-Back Reconciliation</span>
             </div>
             <h1 className="text-base sm:text-lg md:text-xl font-black text-gray-900 tracking-tight flex items-center gap-2">
               <Users className="text-purple-600 shrink-0" size={22} />
               Sub-Contractor Billing (RM2) — Measurement & Leak Prevention
             </h1>
             <p className="text-xs text-gray-500 max-w-4xl">
-              Manage work orders, piece-rate item billing, material/advance deductions, and <strong>back-to-back safety checks</strong> against Department certified quantities across all minors.
+              Generates sub-contractor payment vouchers directly from site works sent from <strong>Actual Details Report</strong>.
+              Applies sub-contractor PO rates, material recoveries, advance/retention deductions, and <strong>back-to-back safety checks</strong> against Department certified quantities.
             </p>
           </div>
 
-          {/* Sub-Contractor & Minor Selection Dropdowns */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                Sub-Contractor
-              </label>
-              <select
-                value={selectedSubContractor}
-                onChange={e => setSelectedSubContractor(e.target.value)}
-                className="text-xs font-bold px-3 py-2 border border-gray-300 rounded-xl bg-gray-50 focus:ring-2 focus:ring-purple-500 focus:outline-none min-w-[220px]"
-              >
-                {DEFAULT_SUB_CONTRACTORS.map(sub => (
-                  <option key={sub} value={sub}>{sub}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                Assigned Minor Scope
-              </label>
-              <select
-                value={selectedMinor}
-                onChange={e => setSelectedMinor(e.target.value)}
-                className="text-xs font-bold px-3 py-2 border border-gray-300 rounded-xl bg-purple-50 text-purple-900 border-purple-200 focus:ring-2 focus:ring-purple-500 focus:outline-none min-w-[180px]"
-              >
-                {TABLE_1_MINORS.map(m => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} ({m.rd})
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/upload-design')}
+              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors cursor-pointer"
+            >
+              Go to Actual Details
+            </button>
           </div>
         </div>
 
-        {/* Aggregate KPI Cards */}
+        {/* Financial KPI Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-gray-100">
           <div className="bg-purple-50/60 p-3 rounded-xl border border-purple-100">
-            <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider block">Total Sub Billed (Gross)</span>
+            <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider block">Pending Sub Bills</span>
             <div className="text-base sm:text-lg font-black text-purple-950 font-mono mt-0.5">
-              {formatCurrency(totalGrossBilled)}
+              {pendingBills.length} Bills
             </div>
-            <div className="text-[10px] text-purple-600 mt-0.5">{subBills.length} bills generated</div>
+            <div className="text-[10px] text-purple-700 mt-0.5">Sent from Actual Details</div>
           </div>
 
-          <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-100">
-            <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">Recoveries & Deductions</span>
-            <div className="text-base sm:text-lg font-black text-amber-950 font-mono mt-0.5">
-              - {formatCurrency(totalDeductions)}
+          <div className="bg-blue-50/60 p-3 rounded-xl border border-blue-100">
+            <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">Gross Value (Pending)</span>
+            <div className="text-base sm:text-lg font-black text-blue-950 font-mono mt-0.5">
+              {formatCurrency(totalPendingGross)}
             </div>
-            <div className="text-[10px] text-amber-700 mt-0.5">Material, advance, retention, TDS</div>
+            <div className="text-[10px] text-blue-600 mt-0.5">At Sub-Contractor PO rates</div>
           </div>
 
           <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100">
-            <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Net Paid to Subs</span>
+            <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Net Payable to Subs</span>
             <div className="text-base sm:text-lg font-black text-emerald-950 font-mono mt-0.5">
-              {formatCurrency(totalNetPaid)}
+              {formatCurrency(totalPendingNet)}
             </div>
-            <div className="text-[10px] text-emerald-600 mt-0.5">Approved vouchers</div>
+            <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">After material & retention deductions</div>
           </div>
 
           <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100">
-            <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">Gross Margin Secured</span>
+            <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">Billed & Paid Vouchers</span>
             <div className="text-base sm:text-lg font-black text-indigo-950 font-mono mt-0.5">
-              +{formatCurrency(totalContractorMargin)}
+              {formatCurrency(totalCertifiedNet)}
             </div>
-            <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">Dept Rate vs Sub Rate Margin</div>
+            <div className="text-[10px] text-indigo-600 mt-0.5">{billedHistory.length} paid vouchers</div>
           </div>
         </div>
       </div>
 
-      {/* Tabs Bar */}
-      <div className="flex items-center gap-1 bg-white p-2 rounded-xl border border-gray-200 shadow-xs">
-        <button
-          onClick={() => setActiveTab('generate')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-            activeTab === 'generate'
-              ? 'bg-purple-600 text-white shadow-xs'
-              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-          }`}
-        >
-          <FileText size={15} />
-          Generate Sub Bill
-        </button>
+      {/* Tabs & Search Filter Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-gray-200 shadow-xs">
+        <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
+          <button
+            onClick={() => setActiveTab('pending')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              activeTab === 'pending'
+                ? 'bg-white text-purple-700 shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <Clock size={15} />
+            Pending Sub Bills ({pendingBills.length})
+          </button>
 
-        <button
-          onClick={() => setActiveTab('reconcile')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-            activeTab === 'reconcile'
-              ? 'bg-purple-600 text-white shadow-xs'
-              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-          }`}
-        >
-          <ShieldCheck size={15} />
-          Back-to-Back Reconciliation & Leak Guard
-        </button>
+          <button
+            onClick={() => setActiveTab('billed')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              activeTab === 'billed'
+                ? 'bg-white text-purple-700 shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <HistoryIcon size={15} />
+            Paid Vouchers History ({billedHistory.length})
+          </button>
 
-        <button
-          onClick={() => setActiveTab('ledger')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-            activeTab === 'ledger'
-              ? 'bg-purple-600 text-white shadow-xs'
-              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-          }`}
-        >
-          <HistoryIcon size={15} />
-          Sub-Contractor Ledger ({subBills.length})
-        </button>
+          <button
+            onClick={() => setActiveTab('reconcile')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              activeTab === 'reconcile'
+                ? 'bg-white text-purple-700 shadow-xs'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <ShieldCheck size={15} />
+            Back-to-Back Leak Guard
+          </button>
+        </div>
+
+        {/* Search Bar */}
+        {activeTab !== 'reconcile' && (
+          <div className="relative min-w-[260px]">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search bill no, sub-contractor, minor..."
+              className="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg bg-gray-50/50 focus:ring-2 focus:ring-purple-500 focus:outline-none"
+            />
+          </div>
+        )}
       </div>
 
-      {/* Tab Views */}
-      {activeTab === 'generate' && (
-        <SubContractorBillSheet
-          selectedSubContractor={selectedSubContractor}
-          selectedMinor={selectedMinor}
-          onBillGenerated={() => {
-            setRefreshKey(prev => prev + 1);
-            setActiveTab('ledger');
-          }}
-        />
-      )}
+      {/* Main Tab Content */}
+      {activeTab === 'reconcile' ? (
+        <BackToBackReconciliation selectedMinor={selectedMinor || 'injewada'} />
+      ) : (
+        <div className="space-y-3">
+          {filteredList.length === 0 ? (
+            <div className="bg-white p-12 text-center rounded-xl border border-gray-200">
+              <Users className="mx-auto text-gray-300 mb-3" size={44} />
+              <h3 className="text-sm font-bold text-gray-700 uppercase">
+                {activeTab === 'pending' ? 'No Pending Sub-Contractor Bills' : 'No Sub-Contractor Vouchers Found'}
+              </h3>
+              <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+                {activeTab === 'pending'
+                  ? 'Go to Actual Details Report, select rows of measured actual works, and click "Send for Payment" to create a sub-contractor bill here.'
+                  : 'Paid vouchers will appear here once certified.'}
+              </p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-[11px]">
+                  <thead className="bg-slate-800 text-white uppercase text-[10px] font-semibold">
+                    <tr>
+                      <th className="py-2.5 px-3">Actions</th>
+                      <th className="py-2.5 px-3">RM / Voucher No</th>
+                      <th className="py-2.5 px-3">Sub-Contractor</th>
+                      <th className="py-2.5 px-3">Project / Minor</th>
+                      <th className="py-2.5 px-2 text-center">Items Sent</th>
+                      <th className="py-2.5 px-3 text-right">Actual Length</th>
+                      <th className="py-2.5 px-3 text-right">Gross Amount</th>
+                      <th className="py-2.5 px-3 text-right text-emerald-300">Net Payable</th>
+                      <th className="py-2.5 px-2 text-center">Safety Check</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 font-mono text-[11px]">
+                    {filteredList.map(bill => {
+                      const isBilled = bill.status === 'billed';
 
-      {activeTab === 'reconcile' && (
-        <BackToBackReconciliation selectedMinor={selectedMinor} />
-      )}
+                      return (
+                        <tr key={bill.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="py-2.5 px-3 font-sans">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => navigate(`/rm-bill/${encodeURIComponent(bill.id)}`)}
+                                className="px-2.5 py-1 text-[11px] font-bold bg-purple-600 hover:bg-purple-700 text-white rounded-md flex items-center gap-1 cursor-pointer shadow-xs"
+                              >
+                                <Eye size={13} /> {isBilled ? 'View Voucher' : 'Calculate & Pay'}
+                              </button>
+                            </div>
+                          </td>
 
-      {activeTab === 'ledger' && (
-        <SubContractorLedger onRefresh={() => setRefreshKey(prev => prev + 1)} />
+                          <td className="py-2.5 px-3 font-bold text-purple-900">
+                            {bill.billNo || bill.rmNo}
+                            {bill.billNo && <div className="text-[10px] text-gray-400 font-normal">Ref: {bill.rmNo}</div>}
+                          </td>
+
+                          <td className="py-2.5 px-3 font-sans font-bold text-gray-900">{bill.subContractorName}</td>
+
+                          <td className="py-2.5 px-3 font-sans font-medium text-gray-800">
+                            <div>{bill.projectName}</div>
+                            {bill.minorName && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-semibold">
+                                Minor: {bill.minorName}
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="py-2.5 px-2 text-center text-gray-700 font-bold">
+                            {bill.liveItemsCount}
+                          </td>
+
+                          <td className="py-2.5 px-3 text-right font-semibold text-gray-900">
+                            {(bill.liveLength || 0).toLocaleString('en-IN')} m
+                          </td>
+
+                          <td className="py-2.5 px-3 text-right font-bold text-gray-950">
+                            {formatCurrency(bill.liveGross)}
+                          </td>
+
+                          <td className="py-2.5 px-3 text-right font-black text-emerald-600 bg-emerald-50/20">
+                            {formatCurrency(bill.liveNet)}
+                          </td>
+
+                          <td className="py-2.5 px-2 text-center font-sans">
+                            <span className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center justify-center gap-1">
+                              <ShieldCheck size={11} /> Reconciled
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
